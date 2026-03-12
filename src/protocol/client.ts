@@ -35,6 +35,9 @@ export interface SelfInfo {
   publicKey: Uint8Array;
   lat: number;
   lon: number;
+  multiAcks: number;
+  advertLocPolicy: number;
+  telemetryMode: number;
   manualAddContacts: number;
   freq: number;
   bw: number;
@@ -45,8 +48,12 @@ export interface SelfInfo {
 
 export interface DeviceInfo {
   firmwareVer: number;
+  maxContacts: number;
+  maxChannels: number;
+  blePin: number;
   buildDate: string;
   model: string;
+  firmwareVersion: string;
 }
 
 export interface ChannelInfo {
@@ -63,15 +70,24 @@ export interface ReceivedMessage {
   text: string;
   timestamp: number;
   snr?: number;
+  pathLen?: number;
 }
 
 export interface BatteryInfo {
+  millivolts: number;
   percentage: number;
-  storageUsed?: number;
-  storageTotal?: number;
+  storageUsedKB: number;
+  storageTotalKB: number;
 }
 
 const RESPONSE_TIMEOUT = 5000;
+
+/** Convert millivolts to approximate battery percentage (LiPo 3.0V-4.2V) */
+function mvToPercent(mv: number): number {
+  if (mv >= 4200) return 100;
+  if (mv <= 3000) return 0;
+  return Math.round(((mv - 3000) / 1200) * 100);
+}
 
 export class MeshCoreClient extends EventEmitter {
   private transport: TCPTransport;
@@ -148,6 +164,12 @@ export class MeshCoreClient extends EventEmitter {
       case PushCode.TELEMETRY_RESPONSE:
         this.emit("telemetry_response", data);
         break;
+      case PushCode.CONTACT_DELETED:
+        this.emit("contact_deleted", data);
+        break;
+      case PushCode.CONTACTS_FULL:
+        this.emit("contacts_full");
+        break;
       default:
         this.emit("push", { code, data });
     }
@@ -182,8 +204,13 @@ export class MeshCoreClient extends EventEmitter {
       const frames: Uint8Array[] = [];
       const timeout = setTimeout(() => {
         this.pendingResolve = null;
-        reject(new Error("Command timeout (multi)"));
-      }, 15000);
+        // If we have some frames, return them instead of erroring
+        if (frames.length > 0) {
+          resolve(frames);
+        } else {
+          reject(new Error("Command timeout (multi)"));
+        }
+      }, 30000);
 
       const handler = (frame: Uint8Array) => {
         frames.push(frame);
@@ -222,7 +249,11 @@ export class MeshCoreClient extends EventEmitter {
       publicKey: r.readBytes(32),
       lat: r.readInt32LE() / 1e6,
       lon: r.readInt32LE() / 1e6,
-      manualAddContacts: r.remaining >= 4 ? r.readByte() : 0,
+      // 3 bytes before manualAddContacts: multiAcks, advertLocPolicy, telemetryMode
+      multiAcks: r.remaining >= 1 ? r.readByte() : 0,
+      advertLocPolicy: r.remaining >= 1 ? r.readByte() : 0,
+      telemetryMode: r.remaining >= 1 ? r.readByte() : 0,
+      manualAddContacts: r.remaining >= 1 ? r.readByte() : 0,
       freq: r.remaining >= 4 ? r.readUInt32LE() / 1000 : 0,
       bw: r.remaining >= 4 ? r.readUInt32LE() / 1000 : 0,
       sf: r.remaining >= 1 ? r.readByte() : 0,
@@ -242,10 +273,22 @@ export class MeshCoreClient extends EventEmitter {
       throw new Error(`DEVICE_QUERY failed: code ${resp[0]}`);
     }
     const r = new BufferReader(resp.slice(1));
+    const firmwareVer = r.readByte();
+    const maxContactsRaw = r.readByte();
+    const maxChannels = r.readByte();
+    const blePin = r.readUInt32LE();
+    const buildDate = r.readFixedString(12);
+    // Model is 40 bytes, firmware version is 20 bytes
+    const model = r.remaining >= 40 ? r.readFixedString(40) : r.readRemainingString();
+    const firmwareVersion = r.remaining >= 20 ? r.readFixedString(20) : "";
     const info: DeviceInfo = {
-      firmwareVer: r.readByte(),
-      buildDate: (r.readBytes(6), r.readFixedString(12)), // skip 6 reserved, read 12 char date
-      model: r.remaining > 0 ? r.readRemainingString() : "",
+      firmwareVer,
+      maxContacts: maxContactsRaw * 2,
+      maxChannels,
+      blePin,
+      buildDate,
+      model,
+      firmwareVersion,
     };
     this._deviceInfo = info;
     return info;
@@ -287,8 +330,8 @@ export class MeshCoreClient extends EventEmitter {
     const type = r.readByte() as ContactType;
     const flags = r.readByte();
     const pathLenByte = r.readByte();
-    // Top 2 bits = hash size indicator, bottom 6 = path length
-    const pathLen = pathLenByte & 0x3f;
+    // 0xFF means unknown/flood path
+    const pathLen = pathLenByte === 0xff ? 0 : pathLenByte;
     const maxPath = 64;
     const path = r.readBytes(maxPath);
     const name = r.readFixedString(32);
@@ -313,7 +356,7 @@ export class MeshCoreClient extends EventEmitter {
     };
   }
 
-  async sendTextMessage(pubKeyPrefix: Uint8Array, text: string): Promise<void> {
+  async sendTextMessage(pubKey: Uint8Array, text: string): Promise<void> {
     if (text.length > MAX_MSG_LENGTH) {
       text = text.slice(0, MAX_MSG_LENGTH);
     }
@@ -322,7 +365,7 @@ export class MeshCoreClient extends EventEmitter {
     w.writeByte(0x00); // txt_type: plain
     w.writeByte(0x00); // attempt
     w.writeUInt32LE(Math.floor(Date.now() / 1000));
-    w.writeBytes(pubKeyPrefix.slice(0, 6));
+    w.writeBytes(pubKey.slice(0, 6)); // 6-byte prefix
     w.writeString(text);
     const resp = await this.sendCommand(w.toBytes());
     if (resp[0] === ResponseCode.ERR) {
@@ -336,7 +379,7 @@ export class MeshCoreClient extends EventEmitter {
     }
     const w = new BufferWriter();
     w.writeByte(CommandCode.SEND_CHANNEL_TXT_MSG);
-    w.writeByte(0x00); // reserved
+    w.writeByte(0x00); // txt_type: plain
     w.writeByte(channelIdx);
     w.writeUInt32LE(Math.floor(Date.now() / 1000));
     w.writeString(text);
@@ -355,45 +398,71 @@ export class MeshCoreClient extends EventEmitter {
       case ResponseCode.NO_MORE_MESSAGES:
         return null;
 
-      case ResponseCode.CONTACT_MSG_RECV:
-      case ResponseCode.CONTACT_MSG_RECV_V3: {
+      case ResponseCode.CONTACT_MSG_RECV: {
+        // Non-V3: [pubKeyPrefix(6)] [pathLen(1)] [txtType(1)] [timestamp(4)] [text...]
         const r = new BufferReader(resp.slice(1));
-        const senderKey = r.readBytes(6); // prefix only
+        const senderKey = r.readBytes(6);
+        const pathLen = r.readByte();
+        const txtType = r.readByte();
         const timestamp = r.readUInt32LE();
-        let snr: number | undefined;
-        if (resp[0] === ResponseCode.CONTACT_MSG_RECV_V3 && r.remaining > 0) {
-          const snrByte = r.readByte();
-          snr = (snrByte > 127 ? snrByte - 256 : snrByte) / 4.0;
-        }
+        // If txtType == 2 (signed), skip 4-byte signature
+        if (txtType === 2 && r.remaining >= 4) r.readBytes(4);
         const text = r.readRemainingString();
-        return {
-          type: "contact",
-          senderKey,
-          text,
-          timestamp,
-          snr,
-        };
+        return { type: "contact", senderKey, text, timestamp, pathLen };
       }
 
-      case ResponseCode.CHANNEL_MSG_RECV:
-      case ResponseCode.CHANNEL_MSG_RECV_V3: {
+      case ResponseCode.CONTACT_MSG_RECV_V3: {
+        // V3: [snr(1)] [reserved(2)] [pubKeyPrefix(6)] [pathLen(1)] [txtType(1)] [timestamp(4)] [text...]
+        const r = new BufferReader(resp.slice(1));
+        const snrByte = r.readByte();
+        const snr = (snrByte > 127 ? snrByte - 256 : snrByte) / 4.0;
+        r.readBytes(2); // reserved
+        const senderKey = r.readBytes(6);
+        const pathLen = r.readByte();
+        const txtType = r.readByte();
+        const timestamp = r.readUInt32LE();
+        if (txtType === 2 && r.remaining >= 4) r.readBytes(4);
+        const text = r.readRemainingString();
+        return { type: "contact", senderKey, text, timestamp, snr, pathLen };
+      }
+
+      case ResponseCode.CHANNEL_MSG_RECV: {
+        // Non-V3: [channelIdx(1)] [pathLen(1)] [txtType(1)] [timestamp(4)] [text...]
         const r = new BufferReader(resp.slice(1));
         const channelIdx = r.readByte();
-        const senderKey = r.readBytes(6);
+        const pathLen = r.readByte();
+        const txtType = r.readByte();
         const timestamp = r.readUInt32LE();
-        let snr: number | undefined;
-        if (resp[0] === ResponseCode.CHANNEL_MSG_RECV_V3 && r.remaining > 0) {
-          const snrByte = r.readByte();
-          snr = (snrByte > 127 ? snrByte - 256 : snrByte) / 4.0;
-        }
         const text = r.readRemainingString();
         return {
           type: "channel",
           channelIdx,
-          senderKey,
+          senderKey: new Uint8Array(0), // channel msgs have no sender key
+          text,
+          timestamp,
+          pathLen,
+        };
+      }
+
+      case ResponseCode.CHANNEL_MSG_RECV_V3: {
+        // V3: [snr(1)] [reserved(2)] [channelIdx(1)] [pathLen(1)] [txtType(1)] [timestamp(4)] [text...]
+        const r = new BufferReader(resp.slice(1));
+        const snrByte = r.readByte();
+        const snr = (snrByte > 127 ? snrByte - 256 : snrByte) / 4.0;
+        r.readBytes(2); // reserved
+        const channelIdx = r.readByte();
+        const pathLen = r.readByte();
+        const txtType = r.readByte();
+        const timestamp = r.readUInt32LE();
+        const text = r.readRemainingString();
+        return {
+          type: "channel",
+          channelIdx,
+          senderKey: new Uint8Array(0),
           text,
           timestamp,
           snr,
+          pathLen,
         };
       }
 
@@ -421,8 +490,15 @@ export class MeshCoreClient extends EventEmitter {
       throw new Error(`GET_BATT failed: code ${resp[0]}`);
     }
     const r = new BufferReader(resp.slice(1));
-    const percentage = r.readUInt16LE();
-    return { percentage };
+    const millivolts = r.readUInt16LE();
+    const storageUsedKB = r.remaining >= 4 ? r.readUInt32LE() : 0;
+    const storageTotalKB = r.remaining >= 4 ? r.readUInt32LE() : 0;
+    return {
+      millivolts,
+      percentage: mvToPercent(millivolts),
+      storageUsedKB,
+      storageTotalKB,
+    };
   }
 
   async getChannel(idx: number): Promise<ChannelInfo> {
@@ -434,9 +510,10 @@ export class MeshCoreClient extends EventEmitter {
       throw new Error(`GET_CHANNEL failed: code ${resp[0]}`);
     }
     const r = new BufferReader(resp.slice(1));
+    const index = r.readByte(); // channel idx from response
     const name = r.readFixedString(32);
-    const secret = r.readBytes(32);
-    return { index: idx, name, secret };
+    const secret = r.readBytes(16); // 16-byte channel key
+    return { index, name, secret };
   }
 
   async setChannel(idx: number, name: string, secret: Uint8Array): Promise<void> {
@@ -444,16 +521,17 @@ export class MeshCoreClient extends EventEmitter {
     w.writeByte(CommandCode.SET_CHANNEL);
     w.writeByte(idx);
     w.writeFixedString(name, 32);
-    w.writeBytes(secret);
+    w.writeBytes(secret.slice(0, 16)); // firmware expects exactly 16 bytes
     const resp = await this.sendCommand(w.toBytes());
     if (resp[0] !== ResponseCode.OK) {
       throw new Error(`SET_CHANNEL failed: code ${resp[0]}`);
     }
   }
 
-  async sendAdvert(): Promise<void> {
+  async sendAdvert(type: number = 1): Promise<void> {
     const w = new BufferWriter();
     w.writeByte(CommandCode.SEND_SELF_ADVERT);
+    w.writeByte(type); // 0=ZeroHop, 1=Flood
     const resp = await this.sendCommand(w.toBytes());
     if (resp[0] !== ResponseCode.OK) {
       throw new Error(`SEND_ADVERT failed: code ${resp[0]}`);
@@ -463,27 +541,27 @@ export class MeshCoreClient extends EventEmitter {
   async setAdvertName(name: string): Promise<void> {
     const w = new BufferWriter();
     w.writeByte(CommandCode.SET_ADVERT_NAME);
-    w.writeFixedString(name, 32);
+    w.writeString(name); // variable-length, not fixed
     const resp = await this.sendCommand(w.toBytes());
     if (resp[0] !== ResponseCode.OK) {
       throw new Error(`SET_ADVERT_NAME failed: code ${resp[0]}`);
     }
   }
 
-  async removeContact(pubKeyPrefix: Uint8Array): Promise<void> {
+  async removeContact(publicKey: Uint8Array): Promise<void> {
     const w = new BufferWriter();
     w.writeByte(CommandCode.REMOVE_CONTACT);
-    w.writeBytes(pubKeyPrefix.slice(0, 6));
+    w.writeBytes(publicKey.slice(0, 32)); // full 32-byte key required
     const resp = await this.sendCommand(w.toBytes());
     if (resp[0] !== ResponseCode.OK) {
       throw new Error(`REMOVE_CONTACT failed: code ${resp[0]}`);
     }
   }
 
-  async resetPath(pubKeyPrefix: Uint8Array): Promise<void> {
+  async resetPath(publicKey: Uint8Array): Promise<void> {
     const w = new BufferWriter();
     w.writeByte(CommandCode.RESET_PATH);
-    w.writeBytes(pubKeyPrefix.slice(0, 6));
+    w.writeBytes(publicKey.slice(0, 32)); // full 32-byte key required
     const resp = await this.sendCommand(w.toBytes());
     if (resp[0] !== ResponseCode.OK) {
       throw new Error(`RESET_PATH failed: code ${resp[0]}`);
@@ -493,6 +571,7 @@ export class MeshCoreClient extends EventEmitter {
   async reboot(): Promise<void> {
     const w = new BufferWriter();
     w.writeByte(CommandCode.REBOOT);
+    w.writeString("reboot"); // safety confirmation string required by firmware
     this.transport.send(w.toBytes());
     // No response expected — device reboots
   }
@@ -508,6 +587,81 @@ export class MeshCoreClient extends EventEmitter {
     return r.readUInt32LE();
   }
 
+  // ─── Config commands ───────────────────────────────────────────
+
+  async setTxPower(power: number): Promise<void> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.SET_RADIO_TX_POWER);
+    w.writeByte(power);
+    const resp = await this.sendCommand(w.toBytes());
+    if (resp[0] !== ResponseCode.OK) {
+      throw new Error(`SET_TX_POWER failed: code ${resp[0]}`);
+    }
+  }
+
+  async setRadioParams(freq: number, bw: number, sf: number, cr: number): Promise<void> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.SET_RADIO_PARAMS);
+    w.writeUInt32LE(Math.round(freq * 1000)); // freq in kHz
+    w.writeUInt32LE(Math.round(bw * 1000));   // bw in Hz
+    w.writeByte(sf);
+    w.writeByte(cr);
+    const resp = await this.sendCommand(w.toBytes());
+    if (resp[0] !== ResponseCode.OK) {
+      throw new Error(`SET_RADIO_PARAMS failed: code ${resp[0]}`);
+    }
+  }
+
+  async setLocation(lat: number, lon: number): Promise<void> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.SET_ADVERT_LATLON);
+    w.writeInt32LE(Math.round(lat * 1e6));
+    w.writeInt32LE(Math.round(lon * 1e6));
+    const resp = await this.sendCommand(w.toBytes());
+    if (resp[0] !== ResponseCode.OK) {
+      throw new Error(`SET_LOCATION failed: code ${resp[0]}`);
+    }
+  }
+
+  async setDevicePin(pin: number): Promise<void> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.SET_DEVICE_PIN);
+    w.writeUInt32LE(pin);
+    const resp = await this.sendCommand(w.toBytes());
+    if (resp[0] !== ResponseCode.OK) {
+      throw new Error(`SET_DEVICE_PIN failed: code ${resp[0]}`);
+    }
+  }
+
+  async getStats(): Promise<Uint8Array> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.GET_STATS);
+    return await this.sendCommand(w.toBytes());
+  }
+
+  async factoryReset(): Promise<void> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.FACTORY_RESET);
+    this.transport.send(w.toBytes());
+  }
+
+  /** Get all channels */
+  async getAllChannels(): Promise<ChannelInfo[]> {
+    const channels: ChannelInfo[] = [];
+    const maxCh = this._deviceInfo?.maxChannels ?? 8;
+    for (let i = 0; i < maxCh; i++) {
+      try {
+        const ch = await this.getChannel(i);
+        channels.push(ch);
+      } catch {
+        break;
+      }
+    }
+    return channels;
+  }
+
+  // ─── Helpers ───────────────────────────────────────────────────
+
   /** Find a contact by name (case-insensitive partial match) */
   findContact(query: string): Contact | undefined {
     const q = query.toLowerCase();
@@ -522,6 +676,7 @@ export class MeshCoreClient extends EventEmitter {
 
   /** Resolve sender key prefix to contact name */
   resolveContactName(keyPrefix: Uint8Array): string {
+    if (keyPrefix.length === 0) return "broadcast";
     const prefixHex = toHex(keyPrefix);
     for (const c of this._contacts.values()) {
       if (c.publicKeyHex.startsWith(prefixHex)) return c.name;

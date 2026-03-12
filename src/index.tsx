@@ -20,18 +20,22 @@ function usage(): never {
     -h, --help           Show this help
 
   Keybindings:
-    1 / 2 / 3            Switch to Chat / Nodes / Info
+    1 / 2 / 3 / 4       Chat / Nodes / Info / Config
     Tab                  Cycle views
     ?                    Toggle help
-    j / k                Navigate (nodes view)
+    i / Enter            Focus text input
+    Esc                  Unfocus / return to chat
+    j / k                Navigate (nodes/config view)
     Ctrl+C               Quit
 
   Commands:
     /to <name|public|ch#>  Set chat target
     /contacts              Show contacts
     /info                  Show device info
+    /config                Show configuration
     /advert                Send advertisement beacon
     /name <name>           Set device name
+    /power <dBm>           Set TX power
     /refresh               Reload contacts
     /reboot                Reboot the radio
     /quit                  Exit
@@ -77,7 +81,17 @@ async function main() {
 
   console.log("Connected! Loading...\n");
 
-  const { unmount, waitUntilExit } = render(<App client={client} />);
+  const { unmount, waitUntilExit } = render(<App client={client} />, {
+    patchConsole: true,
+  });
+
+  const cleanup = () => {
+    client.disconnect();
+    unmount();
+  };
+
+  process.on("SIGINT", () => { cleanup(); process.exit(0); });
+  process.on("SIGTERM", () => { cleanup(); process.exit(0); });
 
   client.on("disconnected", () => {
     unmount();

@@ -1,7 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Box, Text, useInput, useApp, useStdout } from "ink";
+import { Box, Text, useInput, useApp, useStdout, useFocus } from "ink";
 import TextInput from "ink-text-input";
-import type { MeshCoreClient, Contact, ReceivedMessage, DeviceInfo, SelfInfo } from "../protocol/client";
+import type {
+  MeshCoreClient,
+  Contact,
+  ReceivedMessage,
+  DeviceInfo,
+  SelfInfo,
+  ChannelInfo,
+} from "../protocol/client";
 import { toHex } from "../protocol/buffer";
 import { theme, snrColor, batteryColor, contactColor } from "./theme";
 
@@ -15,7 +22,7 @@ interface ChatMessage {
   snr?: number;
 }
 
-type Mode = "chat" | "contacts" | "info" | "help";
+type Mode = "chat" | "contacts" | "info" | "config" | "help";
 
 let msgIdCounter = 0;
 
@@ -34,15 +41,22 @@ export default function App({ client }: AppProps) {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [selfInfo, setSelfInfo] = useState<SelfInfo | null>(null);
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
+  const [channels, setChannels] = useState<ChannelInfo[]>([]);
   const [input, setInput] = useState("");
   const [status, setStatus] = useState("connected");
   const [chatTarget, setChatTarget] = useState<string>("public");
   const [chatChannel, setChatChannel] = useState(0);
   const [battery, setBattery] = useState<number | null>(null);
+  const [batteryMv, setBatteryMv] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [selectedContact, setSelectedContact] = useState(0);
+  const [selectedConfig, setSelectedConfig] = useState(0);
+  const [inputFocused, setInputFocused] = useState(true);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pendingMsgsRef = useRef<ReceivedMessage[]>([]);
+  const batchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seenMsgHashes = useRef<Set<string>>(new Set());
 
   // Initialize
   useEffect(() => {
@@ -59,9 +73,14 @@ export default function App({ client }: AppProps) {
         try {
           const batt = await client.getBattery();
           setBattery(batt.percentage);
+          setBatteryMv(batt.millivolts);
+        } catch {}
+        try {
+          const chs = await client.getAllChannels();
+          setChannels(chs);
         } catch {}
         const msgs = await client.syncAllMessages();
-        for (const m of msgs) addMessage(m);
+        batchAddMessages(msgs);
       } catch (e: any) {
         setError(e.message);
       }
@@ -70,14 +89,14 @@ export default function App({ client }: AppProps) {
     pollRef.current = setInterval(async () => {
       try {
         const msgs = await client.syncAllMessages();
-        for (const m of msgs) addMessage(m);
+        if (msgs.length > 0) batchAddMessages(msgs);
       } catch {}
     }, 2000);
 
     client.on("messages_waiting", async () => {
       try {
         const msgs = await client.syncAllMessages();
-        for (const m of msgs) addMessage(m);
+        if (msgs.length > 0) batchAddMessages(msgs);
       } catch {}
     });
 
@@ -85,24 +104,46 @@ export default function App({ client }: AppProps) {
 
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
+      if (batchTimerRef.current) clearTimeout(batchTimerRef.current);
     };
   }, []);
 
-  const addMessage = useCallback((m: ReceivedMessage) => {
-    const sender = client.resolveContactName(m.senderKey);
-    setMessages((prev) => [
-      ...prev.slice(-500),
-      {
-        id: ++msgIdCounter,
-        timestamp: m.timestamp,
-        sender,
-        text: m.text,
-        isSelf: false,
-        channelIdx: m.channelIdx,
-        snr: m.snr,
-      },
-    ]);
-    setScrollOffset(0);
+  /** Batch incoming messages with 100ms debounce to reduce re-renders */
+  const batchAddMessages = useCallback((newMsgs: ReceivedMessage[]) => {
+    pendingMsgsRef.current.push(...newMsgs);
+    if (batchTimerRef.current) clearTimeout(batchTimerRef.current);
+    batchTimerRef.current = setTimeout(() => {
+      const batch = pendingMsgsRef.current;
+      pendingMsgsRef.current = [];
+      if (batch.length === 0) return;
+
+      setMessages((prev) => {
+        const next = [...prev];
+        for (const m of batch) {
+          // Dedup by hash
+          const hash = `${m.timestamp}-${m.type}-${m.text.slice(0, 30)}`;
+          if (seenMsgHashes.current.has(hash)) continue;
+          seenMsgHashes.current.add(hash);
+          // Keep set from growing unbounded
+          if (seenMsgHashes.current.size > 2000) {
+            const arr = [...seenMsgHashes.current];
+            seenMsgHashes.current = new Set(arr.slice(-1000));
+          }
+          const sender = client.resolveContactName(m.senderKey);
+          next.push({
+            id: ++msgIdCounter,
+            timestamp: m.timestamp,
+            sender,
+            text: m.text,
+            isSelf: false,
+            channelIdx: m.channelIdx,
+            snr: m.snr,
+          });
+        }
+        return next.slice(-500);
+      });
+      setScrollOffset(0);
+    }, 100);
   }, []);
 
   const addSystemMessage = useCallback((text: string) => {
@@ -136,13 +177,20 @@ export default function App({ client }: AppProps) {
           case "contacts":
           case "c":
             setMode("contacts");
+            setInputFocused(false);
             return;
           case "chat":
             setMode("chat");
+            setInputFocused(true);
             return;
           case "info":
           case "i":
             setMode("info");
+            setInputFocused(false);
+            return;
+          case "config":
+            setMode("config");
+            setInputFocused(false);
             return;
           case "to": {
             const target = parts.slice(1).join(" ");
@@ -168,7 +216,7 @@ export default function App({ client }: AppProps) {
           }
           case "advert":
             await client.sendAdvert();
-            addSystemMessage("Advertisement beacon sent");
+            addSystemMessage("Advertisement beacon sent (flood)");
             return;
           case "name":
             if (parts[1]) {
@@ -184,6 +232,17 @@ export default function App({ client }: AppProps) {
             addSystemMessage(`Refreshed: ${cl.length} contacts loaded`);
             return;
           }
+          case "power":
+          case "txpower": {
+            const power = parseInt(parts[1], 10);
+            if (!isNaN(power)) {
+              await client.setTxPower(power);
+              addSystemMessage(`TX power set to ${power} dBm`);
+            } else {
+              setError("Usage: /power <dBm>");
+            }
+            return;
+          }
           case "reboot":
             await client.reboot();
             addSystemMessage("Device rebooting...");
@@ -192,6 +251,7 @@ export default function App({ client }: AppProps) {
           case "h":
           case "?":
             setMode("help");
+            setInputFocused(false);
             return;
           default:
             setError(`Unknown command: ${cmd}`);
@@ -243,21 +303,58 @@ export default function App({ client }: AppProps) {
     // Clear error on any keypress
     if (error) setError(null);
 
-    // Mode switching via number keys
-    if (ch === "1") { setMode("chat"); return; }
-    if (ch === "2") { setMode("contacts"); return; }
-    if (ch === "3") { setMode("info"); return; }
-    if (ch === "?") { setMode(mode === "help" ? "chat" : "help"); return; }
-    if (key.tab) {
-      setMode((v) => v === "chat" ? "contacts" : v === "contacts" ? "info" : "chat");
+    // When input is focused, only handle Escape and Tab for mode switching
+    if (inputFocused) {
+      if (key.escape) {
+        setInputFocused(false);
+        return;
+      }
+      if (key.tab) {
+        setMode((v) =>
+          v === "chat" ? "contacts" : v === "contacts" ? "info" : v === "info" ? "config" : "chat",
+        );
+        setInputFocused(false);
+        return;
+      }
+      // All other keys go to TextInput
       return;
     }
-    if (key.escape) { setMode("chat"); return; }
 
-    // Vim-style scrolling in chat mode
+    // Mode switching via number keys (only when not typing)
+    if (ch === "1") { setMode("chat"); setInputFocused(true); return; }
+    if (ch === "2") { setMode("contacts"); return; }
+    if (ch === "3") { setMode("info"); return; }
+    if (ch === "4") { setMode("config"); return; }
+    if (ch === "?") { setMode(mode === "help" ? "chat" : "help"); return; }
+    if (key.tab) {
+      setMode((v) =>
+        v === "chat" ? "contacts" : v === "contacts" ? "info" : v === "info" ? "config" : "chat",
+      );
+      return;
+    }
+    if (key.escape) {
+      setMode("chat");
+      setInputFocused(true);
+      return;
+    }
+
+    // "i" to start typing (like vim insert mode)
+    if (ch === "i" || key.return) {
+      setInputFocused(true);
+      return;
+    }
+
+    // Scrolling in chat mode
     if (mode === "chat") {
-      if (key.upArrow) setScrollOffset((s) => Math.min(s + 1, Math.max(0, messages.length - 5)));
-      else if (key.downArrow) setScrollOffset((s) => Math.max(0, s - 1));
+      if (ch === "k" || key.upArrow) {
+        setScrollOffset((s) => Math.min(s + 1, Math.max(0, messages.length - 5)));
+      } else if (ch === "j" || key.downArrow) {
+        setScrollOffset((s) => Math.max(0, s - 1));
+      } else if (ch === "g") {
+        setScrollOffset(Math.max(0, messages.length - 5));
+      } else if (ch === "G") {
+        setScrollOffset(0);
+      }
     }
 
     // Contact navigation
@@ -270,14 +367,20 @@ export default function App({ client }: AppProps) {
         setSelectedContact(0);
       } else if (ch === "G") {
         setSelectedContact(Math.max(0, contacts.length - 1));
-      } else if (key.return && contacts[selectedContact]) {
-        setChatTarget(contacts[selectedContact].name);
-        addSystemMessage(`Target set to DM: ${contacts[selectedContact].name}`);
-        setMode("chat");
       } else if (ch === "d" && contacts[selectedContact]) {
         setChatTarget(contacts[selectedContact].name);
         addSystemMessage(`Target set to DM: ${contacts[selectedContact].name}`);
         setMode("chat");
+        setInputFocused(true);
+      }
+    }
+
+    // Config navigation
+    if (mode === "config") {
+      if (ch === "j" || key.downArrow) {
+        setSelectedConfig((s) => s + 1);
+      } else if (ch === "k" || key.upArrow) {
+        setSelectedConfig((s) => Math.max(0, s - 1));
       }
     }
   });
@@ -303,7 +406,11 @@ export default function App({ client }: AppProps) {
             {"▓▓ MESHCORE"}
           </Text>
           <Text color={theme.fg.muted}>│</Text>
-          <Text color={status === "connected" ? theme.status.online : theme.status.offline}>
+          <Text
+            color={
+              status === "connected" ? theme.status.online : theme.status.offline
+            }
+          >
             {status === "connected" ? "● ONLINE" : "○ OFFLINE"}
           </Text>
           {selfInfo && (
@@ -332,6 +439,8 @@ export default function App({ client }: AppProps) {
           <Text> </Text>
           <ModeTab label="3⟩INFO" active={mode === "info"} />
           <Text> </Text>
+          <ModeTab label="4⟩CFG" active={mode === "config"} />
+          <Text> </Text>
           <Text color={theme.fg.muted}>?=help</Text>
         </Box>
       </Box>
@@ -352,7 +461,6 @@ export default function App({ client }: AppProps) {
             messages={messages}
             height={rows - 5}
             scrollOffset={scrollOffset}
-            cols={cols}
           />
         )}
         {mode === "contacts" && (
@@ -368,7 +476,16 @@ export default function App({ client }: AppProps) {
             selfInfo={selfInfo}
             deviceInfo={deviceInfo}
             battery={battery}
+            batteryMv={batteryMv}
             contacts={contacts}
+          />
+        )}
+        {mode === "config" && (
+          <ConfigView
+            selfInfo={selfInfo}
+            deviceInfo={deviceInfo}
+            channels={channels}
+            selected={selectedConfig}
           />
         )}
         {mode === "help" && <HelpView />}
@@ -377,14 +494,22 @@ export default function App({ client }: AppProps) {
       {/* ═══ INPUT BAR ═══ */}
       <Box
         borderStyle="single"
-        borderColor={theme.border.focused}
+        borderColor={inputFocused ? theme.border.focused : theme.border.normal}
         paddingX={1}
       >
         <Text color={theme.fg.accent} bold>
           [{targetLabel}]
         </Text>
-        <Text color={theme.fg.accent}>{" ❯ "}</Text>
-        <TextInput value={input} onChange={setInput} onSubmit={handleSubmit} />
+        <Text color={inputFocused ? theme.fg.accent : theme.fg.muted}>
+          {" ❯ "}
+        </Text>
+        {inputFocused ? (
+          <TextInput value={input} onChange={setInput} onSubmit={handleSubmit} />
+        ) : (
+          <Text color={theme.fg.muted}>
+            {input || "Press i or Enter to type, ? for help"}
+          </Text>
+        )}
       </Box>
     </Box>
   );
@@ -406,12 +531,10 @@ function ChatView({
   messages,
   height,
   scrollOffset,
-  cols,
 }: {
   messages: ChatMessage[];
   height: number;
   scrollOffset: number;
-  cols: number;
 }) {
   const visibleCount = Math.max(1, height - 1);
   const endIdx = messages.length - scrollOffset;
@@ -438,7 +561,7 @@ function ChatView({
       )}
       {scrollOffset > 0 && (
         <Text color={theme.fg.secondary}>
-          {"  ▲ " + scrollOffset + " more above (↑ to scroll)"}
+          {"  ▲ " + scrollOffset + " more above (k/↑ to scroll)"}
         </Text>
       )}
       {visible.map((m) => {
@@ -448,8 +571,10 @@ function ChatView({
           minute: "2-digit",
           second: "2-digit",
         });
-        const chLabel = m.channelIdx !== undefined ? `[CH${m.channelIdx}]` : "";
-        const snrLabel = m.snr !== undefined ? ` ${m.snr.toFixed(1)}dB` : "";
+        const chLabel =
+          m.channelIdx !== undefined ? `[CH${m.channelIdx}]` : "";
+        const snrLabel =
+          m.snr !== undefined ? ` ${m.snr.toFixed(1)}dB` : "";
 
         const senderColor = m.isSelf
           ? theme.message.self
@@ -460,13 +585,17 @@ function ChatView({
         return (
           <Box key={m.id}>
             <Text color={theme.fg.muted}>[{time}] </Text>
-            {chLabel && <Text color={theme.message.channel}>{chLabel} </Text>}
+            {chLabel && (
+              <Text color={theme.message.channel}>{chLabel} </Text>
+            )}
             <Text color={senderColor} bold={!m.isSelf}>
               {m.sender.slice(0, 12).padEnd(12)}
             </Text>
             <Text color={theme.fg.primary}> {m.text}</Text>
             {snrLabel && (
-              <Text color={m.snr !== undefined ? snrColor(m.snr) : theme.fg.muted}>
+              <Text
+                color={m.snr !== undefined ? snrColor(m.snr) : theme.fg.muted}
+              >
                 {snrLabel}
               </Text>
             )}
@@ -493,7 +622,10 @@ function ContactsView({
   const visibleCount = Math.max(1, height - 5);
   const startIdx = Math.max(
     0,
-    Math.min(selected - Math.floor(visibleCount / 2), contacts.length - visibleCount),
+    Math.min(
+      selected - Math.floor(visibleCount / 2),
+      contacts.length - visibleCount,
+    ),
   );
   const visible = contacts.slice(startIdx, startIdx + visibleCount);
 
@@ -527,10 +659,7 @@ function ContactsView({
       {visible.map((c, i) => {
         const actualIdx = startIdx + i;
         const isSelected = actualIdx === selected;
-        const lastSeen =
-          c.lastAdvert > 0
-            ? timeSince(c.lastAdvert)
-            : "never";
+        const lastSeen = c.lastAdvert > 0 ? timeSince(c.lastAdvert) : "never";
         const typeColor = contactColor(c.typeName);
         const prefix = isSelected ? "▶ " : "  ";
 
@@ -551,7 +680,13 @@ function ContactsView({
             </Text>
             <Text
               backgroundColor={isSelected ? theme.bg.selected : undefined}
-              color={c.pathLen <= 1 ? theme.status.online : c.pathLen <= 3 ? theme.fg.accent : theme.fg.secondary}
+              color={
+                c.pathLen <= 1
+                  ? theme.status.online
+                  : c.pathLen <= 3
+                    ? theme.fg.accent
+                    : theme.fg.secondary
+              }
             >
               {String(c.pathLen).padEnd(6)}
             </Text>
@@ -572,7 +707,7 @@ function ContactsView({
       })}
       <Box marginTop={1}>
         <Text color={theme.fg.muted}>
-          j/k=navigate  g/G=top/bottom  Enter/d=DM  /to {"<name>"} to target
+          j/k=navigate g/G=top/bottom d=DM Enter/i=type
         </Text>
       </Box>
     </Box>
@@ -585,11 +720,13 @@ function InfoView({
   selfInfo,
   deviceInfo,
   battery,
+  batteryMv,
   contacts,
 }: {
   selfInfo: SelfInfo | null;
   deviceInfo: DeviceInfo | null;
   battery: number | null;
+  batteryMv: number | null;
   contacts: Contact[];
 }) {
   if (!selfInfo)
@@ -612,12 +749,18 @@ function InfoView({
       </Box>
 
       <Box flexDirection="column">
-        <InfoRow label="Name" value={selfInfo.name} valueColor={theme.fg.accent} />
+        <InfoRow
+          label="Name"
+          value={selfInfo.name}
+          valueColor={theme.fg.accent}
+        />
         {deviceInfo && (
           <>
-            <InfoRow label="Firmware" value={`v${deviceInfo.firmwareVer}`} />
+            <InfoRow label="Firmware" value={`v${deviceInfo.firmwareVer} (${deviceInfo.firmwareVersion})`} />
             <InfoRow label="Build" value={deviceInfo.buildDate} />
             <InfoRow label="Model" value={deviceInfo.model} />
+            <InfoRow label="Max Contacts" value={String(deviceInfo.maxContacts)} />
+            <InfoRow label="Max Channels" value={String(deviceInfo.maxChannels)} />
           </>
         )}
         <Text color={theme.border.normal}>{"  " + "─".repeat(45)}</Text>
@@ -627,7 +770,10 @@ function InfoView({
           valueColor={theme.message.channel}
         />
         <InfoRow label="Bandwidth" value={`${selfInfo.bw.toFixed(1)} kHz`} />
-        <InfoRow label="SF / CR" value={`SF${selfInfo.sf} / CR${selfInfo.cr}`} />
+        <InfoRow
+          label="SF / CR"
+          value={`SF${selfInfo.sf} / CR${selfInfo.cr}`}
+        />
         <InfoRow
           label="TX Power"
           value={`${selfInfo.txPower} / ${selfInfo.maxTxPower} dBm`}
@@ -648,7 +794,7 @@ function InfoView({
         {battery !== null && (
           <InfoRow
             label="Battery"
-            value={`${battery}%`}
+            value={`${battery}%${batteryMv ? ` (${batteryMv}mV)` : ""}`}
             valueColor={batteryColor(battery)}
           />
         )}
@@ -678,6 +824,155 @@ function InfoRow({
   );
 }
 
+// ─── CONFIG VIEW ─────────────────────────────────────────────────
+
+function ConfigView({
+  selfInfo,
+  deviceInfo,
+  channels,
+  selected,
+}: {
+  selfInfo: SelfInfo | null;
+  deviceInfo: DeviceInfo | null;
+  channels: ChannelInfo[];
+  selected: number;
+}) {
+  if (!selfInfo)
+    return (
+      <Box paddingX={1}>
+        <Text color={theme.fg.muted}>Loading config...</Text>
+      </Box>
+    );
+
+  const configItems = [
+    { label: "Device Name", value: selfInfo.name, cmd: "/name <new name>" },
+    {
+      label: "TX Power",
+      value: `${selfInfo.txPower} dBm (max ${selfInfo.maxTxPower})`,
+      cmd: "/power <dBm>",
+    },
+    {
+      label: "Frequency",
+      value: `${selfInfo.freq.toFixed(3)} MHz`,
+      cmd: "(set via firmware)",
+    },
+    {
+      label: "Bandwidth",
+      value: `${selfInfo.bw.toFixed(1)} kHz`,
+      cmd: "(set via firmware)",
+    },
+    { label: "Spreading Factor", value: `SF${selfInfo.sf}`, cmd: "(set via firmware)" },
+    { label: "Coding Rate", value: `CR${selfInfo.cr}`, cmd: "(set via firmware)" },
+    {
+      label: "Location",
+      value:
+        selfInfo.lat !== 0
+          ? `${selfInfo.lat.toFixed(6)}, ${selfInfo.lon.toFixed(6)}`
+          : "not set",
+      cmd: "(set via firmware)",
+    },
+    {
+      label: "Manual Add",
+      value: selfInfo.manualAddContacts ? "enabled" : "disabled",
+      cmd: "(set via firmware)",
+    },
+  ];
+
+  return (
+    <Box flexDirection="column" paddingX={1}>
+      <Box marginBottom={0}>
+        <Text color={theme.fg.accent} bold>
+          {"═══ CONFIGURATION ═══"}
+        </Text>
+      </Box>
+
+      <Box marginBottom={1}>
+        <Text color={theme.fg.secondary}>
+          Use slash commands to modify settings. j/k to browse.
+        </Text>
+      </Box>
+
+      {configItems.map((item, i) => {
+        const isSelected = i === selected;
+        return (
+          <Box key={item.label}>
+            <Text
+              backgroundColor={isSelected ? theme.bg.selected : undefined}
+              color={isSelected ? theme.fg.accent : theme.fg.secondary}
+            >
+              {isSelected ? "▶ " : "  "}
+              {item.label.padEnd(18)}
+            </Text>
+            <Text
+              backgroundColor={isSelected ? theme.bg.selected : undefined}
+              color={theme.fg.primary}
+            >
+              {item.value.padEnd(25)}
+            </Text>
+            <Text
+              backgroundColor={isSelected ? theme.bg.selected : undefined}
+              color={theme.fg.muted}
+            >
+              {item.cmd}
+            </Text>
+          </Box>
+        );
+      })}
+
+      {channels.length > 0 && (
+        <>
+          <Box marginTop={1}>
+            <Text color={theme.fg.accent} bold>
+              {"═══ CHANNELS ═══"}
+            </Text>
+          </Box>
+          {channels.map((ch) => (
+            <Box key={ch.index}>
+              <Text color={theme.fg.secondary}>
+                {"  CH" + String(ch.index).padEnd(4)}
+              </Text>
+              <Text color={ch.name ? theme.fg.primary : theme.fg.muted}>
+                {(ch.name || "(empty)").padEnd(25)}
+              </Text>
+              <Text color={theme.fg.muted}>
+                {toHex(ch.secret).slice(0, 16)}...
+              </Text>
+            </Box>
+          ))}
+        </>
+      )}
+
+      {deviceInfo && (
+        <>
+          <Box marginTop={1}>
+            <Text color={theme.fg.accent} bold>
+              {"═══ DEVICE ═══"}
+            </Text>
+          </Box>
+          <Box>
+            <Text color={theme.fg.secondary}>
+              {"  BLE PIN".padEnd(20)}
+            </Text>
+            <Text color={theme.fg.primary}>{deviceInfo.blePin}</Text>
+          </Box>
+          <Box>
+            <Text color={theme.fg.secondary}>
+              {"  Max Contacts".padEnd(20)}
+            </Text>
+            <Text color={theme.fg.primary}>{deviceInfo.maxContacts}</Text>
+          </Box>
+          <Box>
+            <Text color={theme.fg.secondary}>
+              {"  Max Channels".padEnd(20)}
+            </Text>
+            <Text color={theme.fg.primary}>{deviceInfo.maxChannels}</Text>
+          </Box>
+        </>
+      )}
+    </Box>
+  );
+}
+
 // ─── HELP VIEW ───────────────────────────────────────────────────
 
 function HelpView() {
@@ -697,11 +992,12 @@ function HelpView() {
         <Text color={theme.message.channel} bold>
           Global Shortcuts
         </Text>
-        <Text color={theme.border.normal}>{"─".repeat(35)}</Text>
-        <HelpRow keys="1 / 2 / 3" desc="Switch to Chat / Nodes / Info" />
+        <Text color={theme.border.normal}>{"─".repeat(40)}</Text>
+        <HelpRow keys="1 / 2 / 3 / 4" desc="Chat / Nodes / Info / Config" />
         <HelpRow keys="Tab" desc="Cycle through views" />
         <HelpRow keys="?" desc="Toggle this help screen" />
-        <HelpRow keys="Esc" desc="Return to chat" />
+        <HelpRow keys="Esc" desc="Return to chat / unfocus input" />
+        <HelpRow keys="i / Enter" desc="Focus text input" />
         <HelpRow keys="Ctrl+C" desc="Quit" />
       </Box>
 
@@ -709,31 +1005,33 @@ function HelpView() {
         <Text color={theme.message.channel} bold>
           Chat Mode
         </Text>
-        <Text color={theme.border.normal}>{"─".repeat(35)}</Text>
-        <HelpRow keys="↑ / ↓" desc="Scroll message history" />
-        <HelpRow keys="Enter" desc="Send message to current target" />
+        <Text color={theme.border.normal}>{"─".repeat(40)}</Text>
+        <HelpRow keys="j / k / ↑ / ↓" desc="Scroll message history" />
+        <HelpRow keys="g / G" desc="Scroll to top / bottom" />
       </Box>
 
       <Box marginTop={1} flexDirection="column">
         <Text color={theme.message.channel} bold>
           Nodes Mode
         </Text>
-        <Text color={theme.border.normal}>{"─".repeat(35)}</Text>
+        <Text color={theme.border.normal}>{"─".repeat(40)}</Text>
         <HelpRow keys="j / k / ↑ / ↓" desc="Navigate contact list" />
         <HelpRow keys="g / G" desc="Jump to top / bottom" />
-        <HelpRow keys="Enter / d" desc="DM selected contact" />
+        <HelpRow keys="d" desc="DM selected contact" />
       </Box>
 
       <Box marginTop={1} flexDirection="column">
         <Text color={theme.message.channel} bold>
           Slash Commands
         </Text>
-        <Text color={theme.border.normal}>{"─".repeat(35)}</Text>
+        <Text color={theme.border.normal}>{"─".repeat(40)}</Text>
         <HelpRow keys="/to <target>" desc="Set target (name, public, ch#)" />
         <HelpRow keys="/contacts" desc="Show contacts list" />
         <HelpRow keys="/info" desc="Show device info" />
+        <HelpRow keys="/config" desc="Show configuration" />
         <HelpRow keys="/advert" desc="Send advertisement beacon" />
         <HelpRow keys="/name <n>" desc="Set device advertised name" />
+        <HelpRow keys="/power <dBm>" desc="Set TX power" />
         <HelpRow keys="/refresh" desc="Reload contacts from device" />
         <HelpRow keys="/reboot" desc="Reboot the radio" />
         <HelpRow keys="/quit" desc="Exit meshcore-tui" />
@@ -749,7 +1047,7 @@ function HelpView() {
 function HelpRow({ keys, desc }: { keys: string; desc: string }) {
   return (
     <Box>
-      <Text color={theme.fg.accent}> {keys.padEnd(18)}</Text>
+      <Text color={theme.fg.accent}> {keys.padEnd(20)}</Text>
       <Text color={theme.fg.primary}>{desc}</Text>
     </Box>
   );
@@ -760,6 +1058,7 @@ function HelpRow({ keys, desc }: { keys: string; desc: string }) {
 function timeSince(unixTimestamp: number): string {
   const now = Math.floor(Date.now() / 1000);
   const diff = now - unixTimestamp;
+  if (diff < 0) return "now";
   if (diff < 60) return `${diff}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
