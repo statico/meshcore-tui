@@ -6,6 +6,7 @@ import { render } from "ink";
 import App from "./ui/App";
 import { MeshCoreClient } from "./protocol/client";
 import { DEFAULT_TCP_PORT } from "./protocol/constants";
+import { closeDb, deviceKey } from "./db";
 
 function usage(): never {
   console.log(`Usage: meshcore-tui <address> [options]
@@ -21,23 +22,17 @@ function usage(): never {
 
   Keybindings:
     1 / 2 / 3 / 4       Chat / Nodes / Info / Config
-    Tab                  Cycle views
-    ?                    Toggle help
-    i / Enter            Focus text input
+    ] / [                Next / previous view
+    Tab / Shift-Tab      Next / previous channel (chat)
+    ?                    Context-aware help modal
+    Enter                Focus chat input
     Esc                  Unfocus / return to chat
-    j / k                Navigate (nodes/config view)
-    Ctrl+C               Quit
+    j / k                Navigate (nodes/config)
+    q                    Quit (with confirmation)
+    Ctrl+C               Force quit
 
-  Commands:
+  Chat commands:
     /to <name|public|ch#>  Set chat target
-    /contacts              Show contacts
-    /info                  Show device info
-    /config                Show configuration
-    /advert                Send advertisement beacon
-    /name <name>           Set device name
-    /power <dBm>           Set TX power
-    /refresh               Reload contacts
-    /reboot                Reboot the radio
     /quit                  Exit
 `);
   process.exit(0);
@@ -81,12 +76,14 @@ async function main() {
 
   console.log("Connected! Loading...\n");
 
-  const { unmount, waitUntilExit } = render(<App client={client} />, {
+  const devKey = deviceKey(host!, port);
+  const { unmount, waitUntilExit } = render(<App client={client} deviceKey={devKey} />, {
     patchConsole: true,
   });
 
   const cleanup = () => {
     client.disconnect();
+    closeDb();
     unmount();
   };
 
