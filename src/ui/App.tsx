@@ -22,9 +22,18 @@ interface ChatMessage {
   snr?: number;
 }
 
-type Mode = "chat" | "contacts" | "info" | "config" | "help";
+type Mode = "chat" | "nodes" | "info" | "config" | "help";
 
 let msgIdCounter = 0;
+
+// Config field types for inline editing
+interface ConfigField {
+  key: string;
+  label: string;
+  value: string;
+  type: "text" | "number" | "readonly" | "action";
+  action?: () => Promise<void>;
+}
 
 interface AppProps {
   client: MeshCoreClient;
@@ -50,15 +59,19 @@ export default function App({ client }: AppProps) {
   const [batteryMv, setBatteryMv] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [scrollOffset, setScrollOffset] = useState(0);
-  const [selectedContact, setSelectedContact] = useState(0);
+  const [selectedNode, setSelectedNode] = useState(0);
   const [selectedConfig, setSelectedConfig] = useState(0);
+
+  // Config inline editing state
+  const [editingConfig, setEditingConfig] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pendingMsgsRef = useRef<ReceivedMessage[]>([]);
   const batchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seenMsgHashes = useRef<Set<string>>(new Set());
 
-  // In chat mode, input is always focused. In other modes, it's not.
-  const inputActive = mode === "chat";
+  const inputActive = mode === "chat" || editingConfig !== null;
 
   // Initialize
   useEffect(() => {
@@ -110,7 +123,6 @@ export default function App({ client }: AppProps) {
     };
   }, []);
 
-  /** Batch incoming messages with 100ms debounce to reduce re-renders */
   const batchAddMessages = useCallback((newMsgs: ReceivedMessage[]) => {
     pendingMsgsRef.current.push(...newMsgs);
     if (batchTimerRef.current) clearTimeout(batchTimerRef.current);
@@ -159,178 +171,126 @@ export default function App({ client }: AppProps) {
     ]);
   }, []);
 
-  const handleSubmit = useCallback(
+  // Build config items list
+  const configItems: ConfigField[] = selfInfo
+    ? [
+        { key: "name", label: "Device Name", value: selfInfo.name, type: "text" },
+        { key: "txpower", label: "TX Power (dBm)", value: String(selfInfo.txPower), type: "number" },
+        { key: "freq", label: "Frequency", value: `${selfInfo.freq.toFixed(3)} MHz`, type: "readonly" },
+        { key: "bw", label: "Bandwidth", value: `${selfInfo.bw.toFixed(1)} kHz`, type: "readonly" },
+        { key: "sf", label: "Spreading Factor", value: `SF${selfInfo.sf}`, type: "readonly" },
+        { key: "cr", label: "Coding Rate", value: `CR${selfInfo.cr}`, type: "readonly" },
+        {
+          key: "location",
+          label: "Location",
+          value: selfInfo.lat !== 0 ? `${selfInfo.lat.toFixed(6)}, ${selfInfo.lon.toFixed(6)}` : "not set",
+          type: "readonly",
+        },
+        {
+          key: "advert",
+          label: "Send Advertisement",
+          value: "press Enter",
+          type: "action",
+          action: async () => {
+            await client.sendAdvert();
+            addSystemMessage("Advertisement beacon sent");
+          },
+        },
+        {
+          key: "reboot",
+          label: "Reboot Device",
+          value: "press Enter",
+          type: "action",
+          action: async () => {
+            await client.reboot();
+            addSystemMessage("Device rebooting...");
+          },
+        },
+      ]
+    : [];
+
+  // Add channel items to config
+  const allConfigItems: ConfigField[] = [
+    ...configItems,
+    ...channels.map((ch) => ({
+      key: `ch${ch.index}`,
+      label: `CH${ch.index}`,
+      value: ch.name || "(empty)",
+      type: "action" as const,
+      action: async () => {
+        setChatTarget(`ch${ch.index}`);
+        setChatChannel(ch.index);
+        addSystemMessage(`Switched to CH${ch.index}`);
+        setMode("chat");
+      },
+    })),
+  ];
+
+  // Config edit handlers
+  const startConfigEdit = (field: ConfigField) => {
+    if (field.type === "action" && field.action) {
+      field.action();
+      return;
+    }
+    if (field.type === "readonly") return;
+    setEditingConfig(field.key);
+    setEditValue(field.value);
+  };
+
+  const commitConfigEdit = async () => {
+    if (!editingConfig) return;
+    const field = allConfigItems.find((f) => f.key === editingConfig);
+    if (!field) { setEditingConfig(null); return; }
+
+    try {
+      if (editingConfig === "name") {
+        await client.setAdvertName(editValue);
+        addSystemMessage(`Name set to: ${editValue}`);
+        // Refresh self info
+        setSelfInfo((prev) => prev ? { ...prev, name: editValue } : prev);
+      } else if (editingConfig === "txpower") {
+        const power = parseInt(editValue, 10);
+        if (!isNaN(power)) {
+          await client.setTxPower(power);
+          addSystemMessage(`TX power set to ${power} dBm`);
+          setSelfInfo((prev) => prev ? { ...prev, txPower: power } : prev);
+        }
+      }
+    } catch (e: any) {
+      setError(e.message);
+    }
+    setEditingConfig(null);
+  };
+
+  const handleChatSubmit = useCallback(
     async (value: string) => {
       if (!value.trim()) return;
       setInput("");
 
+      // Keep /to and /quit as power-user shortcuts
       if (value.startsWith("/")) {
         const parts = value.slice(1).split(/\s+/);
         const cmd = parts[0].toLowerCase();
-
-        switch (cmd) {
-          case "quit":
-          case "q":
-            client.disconnect();
-            exit();
-            return;
-          case "contacts":
-          case "c":
-            setMode("contacts");
-            return;
-          case "chat":
-            setMode("chat");
-            return;
-          case "info":
-          case "i":
-            setMode("info");
-            return;
-          case "config":
-            setMode("config");
-            return;
-          case "to": {
-            const target = parts.slice(1).join(" ");
-            if (!target || target === "public" || target === "0") {
-              setChatTarget("public");
-              setChatChannel(0);
-              addSystemMessage("Target set to: PUBLIC CH0");
-            } else if (target.match(/^ch?\d+$/i)) {
-              const idx = parseInt(target.replace(/^ch?/i, ""), 10);
-              setChatTarget(`ch${idx}`);
-              setChatChannel(idx);
-              addSystemMessage(`Target set to: CH${idx}`);
-            } else {
-              const contact = client.findContact(target);
-              if (contact) {
-                setChatTarget(contact.name);
-                addSystemMessage(`Target set to DM: ${contact.name}`);
-              } else {
-                setError(`Contact not found: ${target}`);
-              }
-            }
-            return;
-          }
-          case "advert":
-            await client.sendAdvert();
-            addSystemMessage("Advertisement beacon sent (flood)");
-            return;
-          case "name":
-            if (parts[1]) {
-              const newName = parts.slice(1).join(" ");
-              await client.setAdvertName(newName);
-              addSystemMessage(`Name set to: ${newName}`);
-            }
-            return;
-          case "refresh":
-          case "r": {
-            const cl = await client.getContacts();
-            setContacts(cl);
-            addSystemMessage(`Refreshed: ${cl.length} contacts loaded`);
-            return;
-          }
-          case "power":
-          case "txpower": {
-            const power = parseInt(parts[1], 10);
-            if (!isNaN(power)) {
-              await client.setTxPower(power);
-              addSystemMessage(`TX power set to ${power} dBm`);
-            } else {
-              setError("Usage: /power <dBm>");
-            }
-            return;
-          }
-          case "ch":
-          case "channels": {
-            try {
-              const chs = await client.getAllChannels();
-              setChannels(chs);
-              const lines = chs.map(
-                (c) =>
-                  `CH${c.index}: ${c.name || "(empty)"} [${toHex(c.secret).slice(0, 8)}...]`,
-              );
-              addSystemMessage(
-                `Channels:\n${lines.join("\n")}\nUse /to ch# to switch, /ch set <#> <name> to rename`,
-              );
-            } catch (e: any) {
-              setError(`Failed to get channels: ${e.message}`);
-            }
-            return;
-          }
-          case "join": {
-            const idx = parseInt(parts[1], 10);
-            if (isNaN(idx)) {
-              setError("Usage: /join <channel#>");
-            } else {
-              setChatTarget(`ch${idx}`);
-              setChatChannel(idx);
-              addSystemMessage(`Joined channel CH${idx}`);
-            }
-            return;
-          }
-          case "rooms": {
-            const roomContacts = contacts.filter(
-              (c) => c.typeName === "room",
-            );
-            if (roomContacts.length === 0) {
-              addSystemMessage("No rooms found. Send /advert and /refresh to discover.");
-            } else {
-              const lines = roomContacts.map(
-                (c) =>
-                  `${c.name} (${c.publicKeyHex.slice(0, 8)}) hops:${c.pathLen} last:${c.lastAdvert > 0 ? timeSinceShort(c.lastAdvert) : "never"}`,
-              );
-              addSystemMessage(`Rooms:\n${lines.join("\n")}\nUse /to <room name> to DM a room.`);
-            }
-            return;
-          }
-          case "dm": {
-            const target = parts.slice(1).join(" ");
-            if (!target) {
-              setError("Usage: /dm <contact name>");
-            } else {
-              const contact = client.findContact(target);
-              if (contact) {
-                setChatTarget(contact.name);
-                addSystemMessage(`Target set to DM: ${contact.name}`);
-              } else {
-                setError(`Contact not found: ${target}`);
-              }
-            }
-            return;
-          }
-          case "public":
-            setChatTarget("public");
-            setChatChannel(0);
+        if (cmd === "quit" || cmd === "q") { client.disconnect(); exit(); return; }
+        if (cmd === "to") {
+          const target = parts.slice(1).join(" ");
+          if (!target || target === "public" || target === "0") {
+            setChatTarget("public"); setChatChannel(0);
             addSystemMessage("Target set to: PUBLIC CH0");
-            return;
-          case "remove": {
-            const target = parts.slice(1).join(" ");
-            if (!target) {
-              setError("Usage: /remove <contact name>");
+          } else if (target.match(/^ch?\d+$/i)) {
+            const idx = parseInt(target.replace(/^ch?/i, ""), 10);
+            setChatTarget(`ch${idx}`); setChatChannel(idx);
+            addSystemMessage(`Target set to: CH${idx}`);
+          } else {
+            const contact = client.findContact(target);
+            if (contact) {
+              setChatTarget(contact.name);
+              addSystemMessage(`Target set to DM: ${contact.name}`);
             } else {
-              const contact = client.findContact(target);
-              if (contact) {
-                await client.removeContact(contact.publicKey);
-                addSystemMessage(`Removed contact: ${contact.name}`);
-                const cl = await client.getContacts();
-                setContacts(cl);
-              } else {
-                setError(`Contact not found: ${target}`);
-              }
+              setError(`Contact not found: ${target}`);
             }
-            return;
           }
-          case "reboot":
-            await client.reboot();
-            addSystemMessage("Device rebooting...");
-            return;
-          case "help":
-          case "h":
-          case "?":
-            setMode("help");
-            return;
-          default:
-            setError(`Unknown command: ${cmd}`);
-            return;
+          return;
         }
       }
 
@@ -377,66 +337,81 @@ export default function App({ client }: AppProps) {
   useInput((ch, key) => {
     if (error) setError(null);
 
-    // ── CHAT MODE: input is always active, only Tab/Esc switch away ──
+    // ── CONFIG EDITING MODE ──
+    if (editingConfig) {
+      if (key.escape) { setEditingConfig(null); return; }
+      // TextInput handles Enter/typing
+      return;
+    }
+
+    // ── CHAT MODE ──
     if (mode === "chat") {
-      if (key.tab) {
-        setMode("contacts");
-        return;
-      }
-      // All other keys go to TextInput — don't intercept
-      return;
+      if (key.tab) { setMode("nodes"); return; }
+      return; // TextInput handles all other keys
     }
 
-    // ── NON-CHAT MODES: keyboard shortcuts work freely ──
+    // ── NON-CHAT MODES ──
+    if (key.return && mode !== "config") { setMode("chat"); return; }
+    if (key.escape) { setMode("chat"); return; }
 
-    // Enter goes back to chat to type
-    if (key.return) {
-      setMode("chat");
-      return;
-    }
-    if (key.escape) {
-      setMode("chat");
-      return;
-    }
-
-    // Tab cycles views (skipping chat — use Enter/Esc for that)
     if (key.tab) {
       setMode((v) =>
-        v === "contacts" ? "info" : v === "info" ? "config" : v === "config" ? "help" : "contacts",
+        v === "nodes" ? "info" : v === "info" ? "config" : v === "config" ? "help" : "nodes",
       );
       return;
     }
 
-    // Number keys switch modes
     if (ch === "1") { setMode("chat"); return; }
-    if (ch === "2") { setMode("contacts"); return; }
+    if (ch === "2") { setMode("nodes"); return; }
     if (ch === "3") { setMode("info"); return; }
     if (ch === "4") { setMode("config"); return; }
     if (ch === "?") { setMode(mode === "help" ? "chat" : "help"); return; }
 
-    // Contact navigation
-    if (mode === "contacts") {
+    // ── NODES VIEW ──
+    if (mode === "nodes") {
       if (ch === "j" || key.downArrow) {
-        setSelectedContact((s) => Math.min(s + 1, contacts.length - 1));
+        setSelectedNode((s) => Math.min(s + 1, contacts.length - 1));
       } else if (ch === "k" || key.upArrow) {
-        setSelectedContact((s) => Math.max(0, s - 1));
+        setSelectedNode((s) => Math.max(0, s - 1));
       } else if (ch === "g") {
-        setSelectedContact(0);
+        setSelectedNode(0);
       } else if (ch === "G") {
-        setSelectedContact(Math.max(0, contacts.length - 1));
-      } else if (ch === "d" && contacts[selectedContact]) {
-        setChatTarget(contacts[selectedContact].name);
-        addSystemMessage(`Target set to DM: ${contacts[selectedContact].name}`);
+        setSelectedNode(Math.max(0, contacts.length - 1));
+      } else if (ch === "d" && contacts[selectedNode]) {
+        // DM selected contact
+        setChatTarget(contacts[selectedNode].name);
+        addSystemMessage(`Target set to DM: ${contacts[selectedNode].name}`);
         setMode("chat");
+      } else if (ch === "a") {
+        // Send advertisement
+        client.sendAdvert().then(() => addSystemMessage("Advertisement sent")).catch(() => {});
+      } else if (ch === "r") {
+        // Refresh contacts
+        client.getContacts().then((cl) => {
+          setContacts(cl);
+          addSystemMessage(`Refreshed: ${cl.length} contacts`);
+        }).catch(() => {});
+      } else if (ch === "x" && contacts[selectedNode]) {
+        // Remove contact
+        const c = contacts[selectedNode];
+        client.removeContact(c.publicKey).then(async () => {
+          addSystemMessage(`Removed: ${c.name}`);
+          const cl = await client.getContacts();
+          setContacts(cl);
+          setSelectedNode((s) => Math.min(s, cl.length - 1));
+        }).catch(() => {});
       }
     }
 
-    // Config navigation
+    // ── CONFIG VIEW ──
     if (mode === "config") {
       if (ch === "j" || key.downArrow) {
-        setSelectedConfig((s) => s + 1);
+        setSelectedConfig((s) => Math.min(s + 1, allConfigItems.length - 1));
       } else if (ch === "k" || key.upArrow) {
         setSelectedConfig((s) => Math.max(0, s - 1));
+      } else if (key.return) {
+        const item = allConfigItems[selectedConfig];
+        if (item) startConfigEdit(item);
       }
     }
   });
@@ -458,15 +433,9 @@ export default function App({ client }: AppProps) {
         justifyContent="space-between"
       >
         <Box gap={1}>
-          <Text bold color={theme.fg.accent}>
-            {"▓▓ MESHCORE"}
-          </Text>
+          <Text bold color={theme.fg.accent}>▓▓ MESHCORE</Text>
           <Text color={theme.fg.muted}>│</Text>
-          <Text
-            color={
-              status === "connected" ? theme.status.online : theme.status.offline
-            }
-          >
+          <Text color={status === "connected" ? theme.status.online : theme.status.offline}>
             {status === "connected" ? "● ONLINE" : "○ OFFLINE"}
           </Text>
           {selfInfo && (
@@ -491,7 +460,7 @@ export default function App({ client }: AppProps) {
         <Box gap={0}>
           <ModeTab label="1⟩CHAT" active={mode === "chat"} />
           <Text> </Text>
-          <ModeTab label="2⟩NODES" active={mode === "contacts"} />
+          <ModeTab label="2⟩NODES" active={mode === "nodes"} />
           <Text> </Text>
           <ModeTab label="3⟩INFO" active={mode === "info"} />
           <Text> </Text>
@@ -504,9 +473,7 @@ export default function App({ client }: AppProps) {
       {/* ═══ ERROR BANNER ═══ */}
       {error && (
         <Box paddingX={1}>
-          <Text color={theme.status.offline} bold>
-            ▶ {error}
-          </Text>
+          <Text color={theme.status.offline} bold>▶ {error}</Text>
         </Box>
       )}
 
@@ -521,11 +488,11 @@ export default function App({ client }: AppProps) {
             cols={cols}
           />
         )}
-        {mode === "contacts" && (
-          <ContactsView
+        {mode === "nodes" && (
+          <NodesView
             contacts={contacts}
             height={rows - 5}
-            selected={selectedContact}
+            selected={selectedNode}
             cols={cols}
           />
         )}
@@ -540,10 +507,11 @@ export default function App({ client }: AppProps) {
         )}
         {mode === "config" && (
           <ConfigView
-            selfInfo={selfInfo}
-            deviceInfo={deviceInfo}
-            channels={channels}
+            items={allConfigItems}
             selected={selectedConfig}
+            editingField={editingConfig}
+            editValue={editValue}
+            height={rows - 5}
           />
         )}
         {mode === "help" && <HelpView />}
@@ -555,18 +523,29 @@ export default function App({ client }: AppProps) {
         borderColor={inputActive ? theme.border.focused : theme.border.normal}
         paddingX={1}
       >
-        <Text color={theme.fg.accent} bold>
-          [{targetLabel}]
-        </Text>
-        <Text color={inputActive ? theme.fg.accent : theme.fg.muted}>
-          {" ❯ "}
-        </Text>
-        {inputActive ? (
-          <TextInput value={input} onChange={setInput} onSubmit={handleSubmit} />
+        {editingConfig ? (
+          <>
+            <Text color={theme.fg.accent} bold>
+              [{allConfigItems.find((f) => f.key === editingConfig)?.label ?? ""}]
+            </Text>
+            <Text color={theme.fg.accent}>{" ❯ "}</Text>
+            <TextInput value={editValue} onChange={setEditValue} onSubmit={() => commitConfigEdit()} />
+            <Text color={theme.fg.muted}> (Enter=save, Esc=cancel)</Text>
+          </>
+        ) : mode === "chat" ? (
+          <>
+            <Text color={theme.fg.accent} bold>[{targetLabel}]</Text>
+            <Text color={theme.fg.accent}>{" ❯ "}</Text>
+            <TextInput value={input} onChange={setInput} onSubmit={handleChatSubmit} />
+          </>
         ) : (
-          <Text color={theme.fg.muted}>
-            Press Enter to chat, 1-4 to switch views
-          </Text>
+          <>
+            <Text color={theme.fg.muted}>
+              {mode === "nodes" ? "j/k nav │ d=DM │ a=advert │ r=refresh │ x=remove │ Enter=chat"
+                : mode === "config" ? "j/k nav │ Enter=edit/activate │ Esc=chat"
+                : "Enter/Esc=chat │ 1-4=views │ ?=help"}
+            </Text>
+          </>
         )}
       </Box>
     </Box>
@@ -605,39 +584,20 @@ function ChatView({
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      {/* Chat header showing target */}
       <Box>
-        <Text color={theme.fg.accent} bold>
-          {"═══ MESSAGES"}
-        </Text>
+        <Text color={theme.fg.accent} bold>═══ MESSAGES</Text>
         <Text color={theme.fg.muted}> → </Text>
-        <Text color={theme.message.channel} bold>
-          {targetLabel}
-        </Text>
+        <Text color={theme.message.channel} bold>{targetLabel}</Text>
         {messages.length > 0 && (
-          <Text color={theme.fg.muted}>
-            {" "}({messages.length} total)
-          </Text>
+          <Text color={theme.fg.muted}> ({messages.length} total)</Text>
         )}
-        <Text color={theme.fg.muted}>
-          {" ═══ Tab=switch views"}
-        </Text>
       </Box>
 
       {visible.length === 0 && (
         <Box flexDirection="column" paddingY={1}>
-          <Text color={theme.fg.muted}>
-            {"  No messages yet. Start typing to send a message."}
-          </Text>
-          <Text color={theme.fg.muted}>
-            {"  Use /to <name> to DM, /to public for broadcast, /help for all commands."}
-          </Text>
+          <Text color={theme.fg.muted}>  No messages yet. Start typing to send a message.</Text>
+          <Text color={theme.fg.muted}>  Go to Nodes (2) to select a contact, or type /to &lt;name&gt;</Text>
         </Box>
-      )}
-      {scrollOffset > 0 && (
-        <Text color={theme.fg.secondary}>
-          {"  ▲ " + scrollOffset + " more above"}
-        </Text>
       )}
       {visible.map((m) => {
         const time = formatTime(m.timestamp);
@@ -650,13 +610,10 @@ function ChatView({
             ? theme.message.system
             : theme.message.other;
 
-        // Fixed-width columns: TIME(9) CHAN(6) SENDER(15) SNR(8) MSG(rest)
-        // Truncate message to prevent wrapping
         const timeCol = time.padEnd(9);
         const chanCol = chTag.padEnd(6);
         const senderCol = m.sender.slice(0, 13).padEnd(15);
-        const snrCol = snrStr ? snrStr.padStart(7) : "       ";
-        const fixedWidth = 9 + 6 + 15 + 7 + 4; // columns + padding/gaps
+        const fixedWidth = 9 + 6 + 15 + 7 + 4;
         const maxMsgLen = Math.max(10, cols - fixedWidth);
         const msgText = m.text.length > maxMsgLen ? m.text.slice(0, maxMsgLen - 1) + "…" : m.text;
 
@@ -682,9 +639,9 @@ function ChatView({
   );
 }
 
-// ─── CONTACTS / NODES VIEW ───────────────────────────────────────
+// ─── NODES VIEW ─────────────────────────────────────────────────
 
-function ContactsView({
+function NodesView({
   contacts,
   height,
   selected,
@@ -695,96 +652,114 @@ function ContactsView({
   selected: number;
   cols: number;
 }) {
-  const visibleCount = Math.max(1, height - 5);
+  const inspectorHeight = 8;
+  const listHeight = Math.max(1, height - inspectorHeight - 3);
   const startIdx = Math.max(
     0,
     Math.min(
-      selected - Math.floor(visibleCount / 2),
-      contacts.length - visibleCount,
+      selected - Math.floor(listHeight / 2),
+      contacts.length - listHeight,
     ),
   );
-  const visible = contacts.slice(startIdx, startIdx + visibleCount);
+  const visible = contacts.slice(startIdx, startIdx + listHeight);
+  const selectedContact = contacts[selected];
 
   return (
-    <Box flexDirection="column" paddingX={1}>
-      <Box marginBottom={0}>
-        <Text color={theme.fg.accent} bold>
-          {"═══ NODES (" + contacts.length + ") ═══"}
-        </Text>
-      </Box>
-      <Box>
-        <Text color={theme.fg.secondary} bold>
-          {"  "}
-          {"NAME".padEnd(20)}
-          {"TYPE".padEnd(12)}
-          {"HOPS".padEnd(6)}
-          {"KEY".padEnd(10)}
-          {"LAST SEEN"}
-        </Text>
-      </Box>
-      <Box>
-        <Text color={theme.border.normal}>
-          {"  " + "─".repeat(Math.min(70, cols - 4))}
-        </Text>
-      </Box>
-      {contacts.length === 0 && (
-        <Text color={theme.fg.muted}>
-          {"  No contacts. Send /advert to announce yourself."}
-        </Text>
-      )}
-      {visible.map((c, i) => {
-        const actualIdx = startIdx + i;
-        const isSelected = actualIdx === selected;
-        const lastSeen = c.lastAdvert > 0 ? timeSince(c.lastAdvert) : "never";
-        const typeColor = contactColor(c.typeName);
-        const prefix = isSelected ? "▶ " : "  ";
-
-        return (
-          <Box key={c.publicKeyHex}>
-            <Text
-              backgroundColor={isSelected ? theme.bg.selected : undefined}
-              color={isSelected ? theme.fg.accent : theme.fg.primary}
-            >
-              {prefix}
-              {c.name.slice(0, 18).padEnd(20)}
-            </Text>
-            <Text
-              backgroundColor={isSelected ? theme.bg.selected : undefined}
-              color={typeColor}
-            >
-              {c.typeName.padEnd(12)}
-            </Text>
-            <Text
-              backgroundColor={isSelected ? theme.bg.selected : undefined}
-              color={
-                c.pathLen <= 1
-                  ? theme.status.online
-                  : c.pathLen <= 3
-                    ? theme.fg.accent
-                    : theme.fg.secondary
-              }
-            >
-              {String(c.pathLen).padEnd(6)}
-            </Text>
-            <Text
-              backgroundColor={isSelected ? theme.bg.selected : undefined}
-              color={theme.fg.muted}
-            >
-              {c.publicKeyHex.slice(0, 8).padEnd(10)}
-            </Text>
-            <Text
-              backgroundColor={isSelected ? theme.bg.selected : undefined}
-              color={theme.fg.muted}
-            >
-              {lastSeen}
-            </Text>
+    <Box flexDirection="column" height={height}>
+      {/* Node list */}
+      <Box flexDirection="column" paddingX={1} flexGrow={1}>
+        <Box>
+          <Text color={theme.fg.secondary} bold>
+            {"  "}{"NAME".padEnd(20)}{"TYPE".padEnd(10)}{"HOPS".padEnd(6)}{"KEY".padEnd(10)}{"LAST SEEN"}
+          </Text>
+        </Box>
+        {contacts.length === 0 && (
+          <Box paddingY={1} flexDirection="column">
+            <Text color={theme.fg.muted}>  No nodes discovered yet.</Text>
+            <Text color={theme.fg.muted}>  Press 'a' to send an advertisement beacon.</Text>
           </Box>
-        );
-      })}
-      <Box marginTop={1}>
-        <Text color={theme.fg.muted}>
-          j/k=navigate  g/G=top/bottom  d=DM  Enter=back to chat
-        </Text>
+        )}
+        {visible.map((c, i) => {
+          const actualIdx = startIdx + i;
+          const isSelected = actualIdx === selected;
+          const lastSeen = c.lastAdvert > 0 ? timeSince(c.lastAdvert) : "never";
+          const typeColor = contactColor(c.typeName);
+          const prefix = isSelected ? "▶ " : "  ";
+
+          return (
+            <Box key={c.publicKeyHex}>
+              <Text
+                backgroundColor={isSelected ? theme.bg.selected : undefined}
+                color={isSelected ? theme.fg.accent : theme.fg.primary}
+              >
+                {prefix}{c.name.slice(0, 18).padEnd(20)}
+              </Text>
+              <Text backgroundColor={isSelected ? theme.bg.selected : undefined} color={typeColor}>
+                {c.typeName.padEnd(10)}
+              </Text>
+              <Text
+                backgroundColor={isSelected ? theme.bg.selected : undefined}
+                color={c.pathLen <= 1 ? theme.status.online : c.pathLen <= 3 ? theme.fg.accent : theme.fg.secondary}
+              >
+                {String(c.pathLen).padEnd(6)}
+              </Text>
+              <Text backgroundColor={isSelected ? theme.bg.selected : undefined} color={theme.fg.muted}>
+                {c.publicKeyHex.slice(0, 8).padEnd(10)}
+              </Text>
+              <Text backgroundColor={isSelected ? theme.bg.selected : undefined} color={theme.fg.muted}>
+                {lastSeen}
+              </Text>
+            </Box>
+          );
+        })}
+      </Box>
+
+      {/* Node inspector */}
+      <Box
+        borderStyle="single"
+        borderColor={theme.border.normal}
+        borderTop
+        borderBottom={false}
+        borderLeft={false}
+        borderRight={false}
+      />
+      <Box flexDirection="column" paddingX={1} height={inspectorHeight}>
+        {selectedContact ? (
+          <>
+            <Box>
+              <Text color={theme.fg.accent} bold>{selectedContact.name}</Text>
+              <Text color={theme.fg.muted}> │ </Text>
+              <Text color={contactColor(selectedContact.typeName)}>{selectedContact.typeName}</Text>
+              <Text color={theme.fg.muted}> │ </Text>
+              <Text color={theme.fg.secondary}>key: {selectedContact.publicKeyHex.slice(0, 16)}...</Text>
+            </Box>
+            <Box>
+              <Text color={theme.fg.muted}>Hops: </Text>
+              <Text color={selectedContact.pathLen <= 1 ? theme.status.online : theme.fg.primary}>
+                {selectedContact.pathLen === 0 ? "Direct" : String(selectedContact.pathLen)}
+              </Text>
+              <Text color={theme.fg.muted}>  Last seen: </Text>
+              <Text color={theme.fg.secondary}>
+                {selectedContact.lastAdvert > 0 ? timeSince(selectedContact.lastAdvert) : "never"}
+              </Text>
+            </Box>
+            {selectedContact.lat !== 0 && (
+              <Box>
+                <Text color={theme.fg.muted}>Position: </Text>
+                <Text color="#00bfff">
+                  {selectedContact.lat.toFixed(6)}, {selectedContact.lon.toFixed(6)}
+                </Text>
+              </Box>
+            )}
+            <Box>
+              <Text color={theme.fg.muted}>
+                Full key: {selectedContact.publicKeyHex}
+              </Text>
+            </Box>
+          </>
+        ) : (
+          <Text color={theme.fg.muted}>No node selected</Text>
+        )}
       </Box>
     </Box>
   );
@@ -819,17 +794,11 @@ function InfoView({
   return (
     <Box flexDirection="column" paddingX={1}>
       <Box marginBottom={0}>
-        <Text color={theme.fg.accent} bold>
-          {"═══ DEVICE INFO ═══"}
-        </Text>
+        <Text color={theme.fg.accent} bold>═══ DEVICE INFO ═══</Text>
       </Box>
 
       <Box flexDirection="column">
-        <InfoRow
-          label="Name"
-          value={selfInfo.name}
-          valueColor={theme.fg.accent}
-        />
+        <InfoRow label="Name" value={selfInfo.name} valueColor={theme.fg.accent} />
         {deviceInfo && (
           <>
             <InfoRow label="Firmware" value={`v${deviceInfo.firmwareVer} (${deviceInfo.firmwareVersion})`} />
@@ -840,33 +809,15 @@ function InfoView({
           </>
         )}
         <Text color={theme.border.normal}>{"  " + "─".repeat(45)}</Text>
-        <InfoRow
-          label="Frequency"
-          value={`${selfInfo.freq.toFixed(3)} MHz`}
-          valueColor={theme.message.channel}
-        />
+        <InfoRow label="Frequency" value={`${selfInfo.freq.toFixed(3)} MHz`} valueColor={theme.message.channel} />
         <InfoRow label="Bandwidth" value={`${selfInfo.bw.toFixed(1)} kHz`} />
-        <InfoRow
-          label="SF / CR"
-          value={`SF${selfInfo.sf} / CR${selfInfo.cr}`}
-        />
-        <InfoRow
-          label="TX Power"
-          value={`${selfInfo.txPower} / ${selfInfo.maxTxPower} dBm`}
-        />
+        <InfoRow label="SF / CR" value={`SF${selfInfo.sf} / CR${selfInfo.cr}`} />
+        <InfoRow label="TX Power" value={`${selfInfo.txPower} / ${selfInfo.maxTxPower} dBm`} />
         {selfInfo.lat !== 0 && (
-          <InfoRow
-            label="Location"
-            value={`${selfInfo.lat.toFixed(6)}, ${selfInfo.lon.toFixed(6)}`}
-            valueColor="#00bfff"
-          />
+          <InfoRow label="Location" value={`${selfInfo.lat.toFixed(6)}, ${selfInfo.lon.toFixed(6)}`} valueColor="#00bfff" />
         )}
         <Text color={theme.border.normal}>{"  " + "─".repeat(45)}</Text>
-        <InfoRow
-          label="Public Key"
-          value={toHex(selfInfo.publicKey).slice(0, 16) + "..."}
-          valueColor={theme.fg.muted}
-        />
+        <InfoRow label="Public Key" value={toHex(selfInfo.publicKey).slice(0, 16) + "..."} valueColor={theme.fg.muted} />
         {battery !== null && (
           <InfoRow
             label="Battery"
@@ -883,15 +834,7 @@ function InfoView({
   );
 }
 
-function InfoRow({
-  label,
-  value,
-  valueColor,
-}: {
-  label: string;
-  value: string;
-  valueColor?: string;
-}) {
+function InfoRow({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
   return (
     <Box>
       <Text color={theme.fg.secondary}>{"  " + label.padEnd(14)}</Text>
@@ -903,148 +846,76 @@ function InfoRow({
 // ─── CONFIG VIEW ─────────────────────────────────────────────────
 
 function ConfigView({
-  selfInfo,
-  deviceInfo,
-  channels,
+  items,
   selected,
+  editingField,
+  editValue,
+  height,
 }: {
-  selfInfo: SelfInfo | null;
-  deviceInfo: DeviceInfo | null;
-  channels: ChannelInfo[];
+  items: ConfigField[];
   selected: number;
+  editingField: string | null;
+  editValue: string;
+  height: number;
 }) {
-  if (!selfInfo)
+  if (items.length === 0)
     return (
       <Box paddingX={1}>
         <Text color={theme.fg.muted}>Loading config...</Text>
       </Box>
     );
 
-  const configItems = [
-    { label: "Device Name", value: selfInfo.name, cmd: "/name <new name>" },
-    {
-      label: "TX Power",
-      value: `${selfInfo.txPower} dBm (max ${selfInfo.maxTxPower})`,
-      cmd: "/power <dBm>",
-    },
-    {
-      label: "Frequency",
-      value: `${selfInfo.freq.toFixed(3)} MHz`,
-      cmd: "(set via firmware)",
-    },
-    {
-      label: "Bandwidth",
-      value: `${selfInfo.bw.toFixed(1)} kHz`,
-      cmd: "(set via firmware)",
-    },
-    { label: "Spreading Factor", value: `SF${selfInfo.sf}`, cmd: "(set via firmware)" },
-    { label: "Coding Rate", value: `CR${selfInfo.cr}`, cmd: "(set via firmware)" },
-    {
-      label: "Location",
-      value:
-        selfInfo.lat !== 0
-          ? `${selfInfo.lat.toFixed(6)}, ${selfInfo.lon.toFixed(6)}`
-          : "not set",
-      cmd: "(set via firmware)",
-    },
-    {
-      label: "Manual Add",
-      value: selfInfo.manualAddContacts ? "enabled" : "disabled",
-      cmd: "(set via firmware)",
-    },
-  ];
+  const contentHeight = Math.max(1, height - 3);
+  let startIndex = 0;
+  if (items.length > contentHeight) {
+    const halfView = Math.floor(contentHeight / 2);
+    startIndex = Math.max(0, Math.min(selected - halfView, items.length - contentHeight));
+  }
+  const visible = items.slice(startIndex, startIndex + contentHeight);
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      <Box marginBottom={0}>
-        <Text color={theme.fg.accent} bold>
-          {"═══ CONFIGURATION ═══"}
-        </Text>
+      <Box>
+        <Text color={theme.fg.accent} bold>CONFIG</Text>
+        <Text color={theme.fg.muted}> — j/k navigate, Enter edit/activate</Text>
       </Box>
 
-      <Box marginBottom={1}>
-        <Text color={theme.fg.secondary}>
-          Use slash commands to modify settings. j/k to browse. Enter to chat.
-        </Text>
-      </Box>
+      {visible.map((item, i) => {
+        const globalIndex = startIndex + i;
+        const isSelected = globalIndex === selected;
+        const isEditing = editingField === item.key;
 
-      {configItems.map((item, i) => {
-        const isSelected = i === selected;
         return (
-          <Box key={item.label}>
-            <Text
-              backgroundColor={isSelected ? theme.bg.selected : undefined}
-              color={isSelected ? theme.fg.accent : theme.fg.secondary}
-            >
-              {isSelected ? "▶ " : "  "}
-              {item.label.padEnd(18)}
+          <Box key={item.key} backgroundColor={isSelected && !isEditing ? theme.bg.selected : undefined}>
+            <Text color={isSelected ? theme.fg.accent : theme.fg.muted}>
+              {isSelected ? "> " : "  "}
             </Text>
-            <Text
-              backgroundColor={isSelected ? theme.bg.selected : undefined}
-              color={theme.fg.primary}
-            >
-              {item.value.padEnd(25)}
-            </Text>
-            <Text
-              backgroundColor={isSelected ? theme.bg.selected : undefined}
-              color={theme.fg.muted}
-            >
-              {item.cmd}
-            </Text>
+            <Text color={theme.fg.secondary}>{item.label.padEnd(20)}</Text>
+            {isEditing ? (
+              <>
+                <Text color={theme.fg.accent}>{editValue}</Text>
+                <Text color={theme.fg.accent}>█</Text>
+                <Text color={theme.fg.muted}> (Enter=save, Esc=cancel)</Text>
+              </>
+            ) : (
+              <>
+                <Text color={item.type === "readonly" ? theme.fg.muted : theme.fg.primary}>
+                  {item.value}
+                </Text>
+                {isSelected && item.type === "text" && (
+                  <Text color={theme.fg.muted}> [Enter] edit</Text>
+                )}
+                {isSelected && item.type === "number" && (
+                  <Text color={theme.fg.muted}> [Enter] edit</Text>
+                )}
+                {isSelected && item.type === "action" && (
+                  <Text color={theme.fg.muted}> [Enter] activate</Text>
+                )}
+              </>
+            )}
           </Box>
         );
       })}
-
-      {channels.length > 0 && (
-        <>
-          <Box marginTop={1}>
-            <Text color={theme.fg.accent} bold>
-              {"═══ CHANNELS ═══"}
-            </Text>
-          </Box>
-          {channels.map((ch) => (
-            <Box key={ch.index}>
-              <Text color={theme.fg.secondary}>
-                {"  CH" + String(ch.index).padEnd(4)}
-              </Text>
-              <Text color={ch.name ? theme.fg.primary : theme.fg.muted}>
-                {(ch.name || "(empty)").padEnd(25)}
-              </Text>
-              <Text color={theme.fg.muted}>
-                {toHex(ch.secret).slice(0, 16)}...
-              </Text>
-            </Box>
-          ))}
-        </>
-      )}
-
-      {deviceInfo && (
-        <>
-          <Box marginTop={1}>
-            <Text color={theme.fg.accent} bold>
-              {"═══ DEVICE ═══"}
-            </Text>
-          </Box>
-          <Box>
-            <Text color={theme.fg.secondary}>
-              {"  BLE PIN".padEnd(20)}
-            </Text>
-            <Text color={theme.fg.primary}>{deviceInfo.blePin}</Text>
-          </Box>
-          <Box>
-            <Text color={theme.fg.secondary}>
-              {"  Max Contacts".padEnd(20)}
-            </Text>
-            <Text color={theme.fg.primary}>{deviceInfo.maxContacts}</Text>
-          </Box>
-          <Box>
-            <Text color={theme.fg.secondary}>
-              {"  Max Channels".padEnd(20)}
-            </Text>
-            <Text color={theme.fg.primary}>{deviceInfo.maxChannels}</Text>
-          </Box>
-        </>
-      )}
     </Box>
   );
 }
@@ -1065,56 +936,39 @@ function HelpView() {
       </Text>
 
       <Box marginTop={1} flexDirection="column">
-        <Text color={theme.message.channel} bold>
-          Navigation
-        </Text>
-        <Text color={theme.border.normal}>{"─".repeat(42)}</Text>
+        <Text color={theme.message.channel} bold>Navigation</Text>
+        <Text color={theme.border.normal}>{"─".repeat(46)}</Text>
+        <HelpRow keys="1 / 2 / 3 / 4" desc="Chat / Nodes / Info / Config" />
         <HelpRow keys="Tab" desc="Cycle through views" />
-        <HelpRow keys="Enter / Esc" desc="Return to chat (from any view)" />
-        <HelpRow keys="1 / 2 / 3 / 4" desc="Jump to Chat/Nodes/Info/Config" />
+        <HelpRow keys="Enter / Esc" desc="Return to chat" />
         <HelpRow keys="?" desc="Toggle this help screen" />
         <HelpRow keys="Ctrl+C" desc="Quit" />
       </Box>
 
       <Box marginTop={1} flexDirection="column">
-        <Text color={theme.message.channel} bold>
-          Chat (input always active)
-        </Text>
-        <Text color={theme.border.normal}>{"─".repeat(42)}</Text>
+        <Text color={theme.message.channel} bold>Chat</Text>
+        <Text color={theme.border.normal}>{"─".repeat(46)}</Text>
         <HelpRow keys="Type + Enter" desc="Send message to current target" />
-        <HelpRow keys="Tab" desc="Switch to nodes view" />
-      </Box>
-
-      <Box marginTop={1} flexDirection="column">
-        <Text color={theme.message.channel} bold>
-          Nodes
-        </Text>
-        <Text color={theme.border.normal}>{"─".repeat(42)}</Text>
-        <HelpRow keys="j / k / ↑ / ↓" desc="Navigate contact list" />
-        <HelpRow keys="g / G" desc="Jump to top / bottom" />
-        <HelpRow keys="d" desc="DM selected contact" />
-      </Box>
-
-      <Box marginTop={1} flexDirection="column">
-        <Text color={theme.message.channel} bold>
-          Slash Commands (type in chat)
-        </Text>
-        <Text color={theme.border.normal}>{"─".repeat(42)}</Text>
         <HelpRow keys="/to <target>" desc="Set target (name, public, ch#)" />
-        <HelpRow keys="/dm <name>" desc="DM a contact" />
-        <HelpRow keys="/public" desc="Switch to public channel" />
-        <HelpRow keys="/join <ch#>" desc="Join a channel" />
-        <HelpRow keys="/channels" desc="List all channels" />
-        <HelpRow keys="/rooms" desc="List room-type contacts" />
-        <HelpRow keys="/contacts /info" desc="Switch views" />
-        <HelpRow keys="/config" desc="Show configuration" />
-        <HelpRow keys="/advert" desc="Send advertisement beacon" />
-        <HelpRow keys="/name <n>" desc="Set device advertised name" />
-        <HelpRow keys="/power <dBm>" desc="Set TX power" />
-        <HelpRow keys="/refresh" desc="Reload contacts from device" />
-        <HelpRow keys="/remove <name>" desc="Remove a contact" />
-        <HelpRow keys="/reboot" desc="Reboot the radio" />
-        <HelpRow keys="/quit" desc="Exit meshcore-tui" />
+      </Box>
+
+      <Box marginTop={1} flexDirection="column">
+        <Text color={theme.message.channel} bold>Nodes</Text>
+        <Text color={theme.border.normal}>{"─".repeat(46)}</Text>
+        <HelpRow keys="j / k / ↑ / ↓" desc="Navigate node list" />
+        <HelpRow keys="g / G" desc="Jump to top / bottom" />
+        <HelpRow keys="d" desc="DM selected node" />
+        <HelpRow keys="a" desc="Send advertisement beacon" />
+        <HelpRow keys="r" desc="Refresh contacts from device" />
+        <HelpRow keys="x" desc="Remove selected contact" />
+      </Box>
+
+      <Box marginTop={1} flexDirection="column">
+        <Text color={theme.message.channel} bold>Config</Text>
+        <Text color={theme.border.normal}>{"─".repeat(46)}</Text>
+        <HelpRow keys="j / k" desc="Navigate config items" />
+        <HelpRow keys="Enter" desc="Edit field or activate action" />
+        <HelpRow keys="Esc" desc="Cancel edit / return to chat" />
       </Box>
 
       <Box marginTop={1}>
@@ -1141,10 +995,6 @@ function formatTime(ts: number): string {
   const m = String(d.getMinutes()).padStart(2, "0");
   const s = String(d.getSeconds()).padStart(2, "0");
   return `${h}:${m}:${s}`;
-}
-
-function timeSinceShort(unixTimestamp: number): string {
-  return timeSince(unixTimestamp);
 }
 
 function timeSince(unixTimestamp: number): string {
