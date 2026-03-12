@@ -239,6 +239,86 @@ export default function App({ client }: AppProps) {
             }
             return;
           }
+          case "ch":
+          case "channels": {
+            try {
+              const chs = await client.getAllChannels();
+              setChannels(chs);
+              const lines = chs.map(
+                (c) =>
+                  `CH${c.index}: ${c.name || "(empty)"} [${toHex(c.secret).slice(0, 8)}...]`,
+              );
+              addSystemMessage(
+                `Channels:\n${lines.join("\n")}\nUse /to ch# to switch, /ch set <#> <name> to rename`,
+              );
+            } catch (e: any) {
+              setError(`Failed to get channels: ${e.message}`);
+            }
+            return;
+          }
+          case "join": {
+            const idx = parseInt(parts[1], 10);
+            if (isNaN(idx)) {
+              setError("Usage: /join <channel#>");
+            } else {
+              setChatTarget(`ch${idx}`);
+              setChatChannel(idx);
+              addSystemMessage(`Joined channel CH${idx}`);
+            }
+            return;
+          }
+          case "rooms": {
+            const roomContacts = contacts.filter(
+              (c) => c.typeName === "room",
+            );
+            if (roomContacts.length === 0) {
+              addSystemMessage("No rooms found. Send /advert and /refresh to discover.");
+            } else {
+              const lines = roomContacts.map(
+                (c) =>
+                  `${c.name} (${c.publicKeyHex.slice(0, 8)}) hops:${c.pathLen} last:${c.lastAdvert > 0 ? timeSinceShort(c.lastAdvert) : "never"}`,
+              );
+              addSystemMessage(`Rooms:\n${lines.join("\n")}\nUse /to <room name> to DM a room.`);
+            }
+            return;
+          }
+          case "dm": {
+            const target = parts.slice(1).join(" ");
+            if (!target) {
+              setError("Usage: /dm <contact name>");
+            } else {
+              const contact = client.findContact(target);
+              if (contact) {
+                setChatTarget(contact.name);
+                addSystemMessage(`Target set to DM: ${contact.name}`);
+              } else {
+                setError(`Contact not found: ${target}`);
+              }
+            }
+            return;
+          }
+          case "public":
+            setChatTarget("public");
+            setChatChannel(0);
+            addSystemMessage("Target set to: PUBLIC CH0");
+            return;
+          case "remove": {
+            const target = parts.slice(1).join(" ");
+            if (!target) {
+              setError("Usage: /remove <contact name>");
+            } else {
+              const contact = client.findContact(target);
+              if (contact) {
+                await client.removeContact(contact.publicKey);
+                addSystemMessage(`Removed contact: ${contact.name}`);
+                const cl = await client.getContacts();
+                setContacts(cl);
+              } else {
+                setError(`Contact not found: ${target}`);
+              }
+            }
+            return;
+          }
           case "reboot":
             await client.reboot();
             addSystemMessage("Device rebooting...");
@@ -1009,12 +1089,18 @@ function HelpView() {
         </Text>
         <Text color={theme.border.normal}>{"─".repeat(42)}</Text>
         <HelpRow keys="/to <target>" desc="Set target (name, public, ch#)" />
+        <HelpRow keys="/dm <name>" desc="DM a contact" />
+        <HelpRow keys="/public" desc="Switch to public channel" />
+        <HelpRow keys="/join <ch#>" desc="Join a channel" />
+        <HelpRow keys="/channels" desc="List all channels" />
+        <HelpRow keys="/rooms" desc="List room-type contacts" />
         <HelpRow keys="/contacts /info" desc="Switch views" />
         <HelpRow keys="/config" desc="Show configuration" />
         <HelpRow keys="/advert" desc="Send advertisement beacon" />
         <HelpRow keys="/name <n>" desc="Set device advertised name" />
         <HelpRow keys="/power <dBm>" desc="Set TX power" />
         <HelpRow keys="/refresh" desc="Reload contacts from device" />
+        <HelpRow keys="/remove <name>" desc="Remove a contact" />
         <HelpRow keys="/reboot" desc="Reboot the radio" />
         <HelpRow keys="/quit" desc="Exit meshcore-tui" />
       </Box>
@@ -1043,6 +1129,10 @@ function formatTime(ts: number): string {
   const m = String(d.getMinutes()).padStart(2, "0");
   const s = String(d.getSeconds()).padStart(2, "0");
   return `${h}:${m}:${s}`;
+}
+
+function timeSinceShort(unixTimestamp: number): string {
+  return timeSince(unixTimestamp);
 }
 
 function timeSince(unixTimestamp: number): string {
