@@ -241,11 +241,12 @@ export class MeshCoreClient extends EventEmitter {
     if (resp[0] !== ResponseCode.SELF_INFO) {
       throw new Error(`APP_START failed: code ${resp[0]}`);
     }
-    const r = new BufferReader(resp.slice(1));
+    const body = resp.slice(1);
+    const r = new BufferReader(body);
 
-    // Debug: dump raw hex for protocol debugging
+    // Debug: dump full raw hex for protocol debugging
     console.error(
-      `[DEBUG] SELF_INFO response (${resp.length} bytes): ${toHex(resp.slice(0, Math.min(70, resp.length)))}...`,
+      `[DEBUG] SELF_INFO raw (${resp.length} bytes): ${toHex(resp)}`,
     );
 
     const type = r.readByte();
@@ -255,18 +256,51 @@ export class MeshCoreClient extends EventEmitter {
     const lat = r.readInt32LE() / 1e6;
     const lon = r.readInt32LE() / 1e6;
 
-    // After base fields (43 bytes), remaining bytes contain:
-    // manualAddContacts(1) freq(4) bw(4) sf(1) cr(1) name(var)
-    // Note: multiAcks/advertLocPolicy/telemetryMode only present with appVer >= 3
-    const manualAddContacts = r.remaining >= 1 ? r.readByte() : 0;
-    const freq = r.remaining >= 4 ? r.readUInt32LE() / 1000 : 0;
-    const bw = r.remaining >= 4 ? r.readUInt32LE() / 1000 : 0;
-    const sf = r.remaining >= 1 ? r.readByte() : 0;
-    const cr = r.remaining >= 1 ? r.readByte() : 0;
+    // After base fields (43 bytes), the remaining bytes contain radio params + name.
+    // The number of skip bytes before freq varies by firmware version.
+    // Auto-detect by scanning for a plausible freq value (100-1000 MHz range).
+    const savedOffset = r.offset;
+    let skipBytes = 0;
+    let freq = 0, bw = 0, sf = 0, cr = 0;
+    let foundParams = false;
+
+    for (let skip = 0; skip <= Math.min(8, r.remaining - 11); skip++) {
+      r.offset = savedOffset + skip;
+      const testFreq = r.readUInt32LE() / 1000;
+      const testBw = r.readUInt32LE() / 1000;
+      const testSf = r.readByte();
+      const testCr = r.readByte();
+
+      if (testFreq >= 100 && testFreq <= 1000 &&
+          testBw >= 5 && testBw <= 600 &&
+          testSf >= 5 && testSf <= 12 &&
+          testCr >= 1 && testCr <= 8) {
+        freq = testFreq;
+        bw = testBw;
+        sf = testSf;
+        cr = testCr;
+        skipBytes = skip;
+        foundParams = true;
+        console.error(`[DEBUG] Found radio params at skip=${skip} from offset ${savedOffset}: freq=${freq} bw=${bw} sf=${sf} cr=${cr}`);
+        break;
+      }
+    }
+
+    if (!foundParams) {
+      // Fallback: just read from current position
+      r.offset = savedOffset + 1; // skip 1 byte (manualAddContacts)
+      freq = r.remaining >= 4 ? r.readUInt32LE() / 1000 : 0;
+      bw = r.remaining >= 4 ? r.readUInt32LE() / 1000 : 0;
+      sf = r.remaining >= 1 ? r.readByte() : 0;
+      cr = r.remaining >= 1 ? r.readByte() : 0;
+      console.error(`[DEBUG] Radio params NOT auto-detected, fallback: freq=${freq} bw=${bw} sf=${sf} cr=${cr}`);
+    }
+
+    const manualAddContacts = skipBytes > 0 ? body[savedOffset] : 0;
     const name = r.remaining > 0 ? r.readRemainingString() : "";
 
     console.error(
-      `[DEBUG] Parsed SelfInfo: freq=${freq} bw=${bw} sf=${sf} cr=${cr} name="${name}"`,
+      `[DEBUG] Parsed SelfInfo: skip=${skipBytes} freq=${freq} bw=${bw} sf=${sf} cr=${cr} name="${name}"`,
     );
 
     const info: SelfInfo = {
@@ -300,9 +334,9 @@ export class MeshCoreClient extends EventEmitter {
     }
     const r = new BufferReader(resp.slice(1));
 
-    // Debug: dump raw hex for protocol debugging
+    // Debug: dump full raw hex
     console.error(
-      `[DEBUG] DEVICE_INFO response (${resp.length} bytes): ${toHex(resp.slice(0, Math.min(80, resp.length)))}...`,
+      `[DEBUG] DEVICE_INFO raw (${resp.length} bytes): ${toHex(resp)}`,
     );
 
     const firmwareVer = r.readByte();
@@ -310,12 +344,36 @@ export class MeshCoreClient extends EventEmitter {
     const maxChannels = r.readByte();
     const blePin = r.readUInt32LE();
     const buildDate = r.readFixedString(12);
-    // Model is 20 bytes, firmware version is 20 bytes
-    const model = r.remaining >= 20 ? r.readFixedString(20) : r.readRemainingString();
-    const firmwareVersion = r.remaining >= 20 ? r.readFixedString(20) : (r.remaining > 0 ? r.readRemainingString() : "");
+
+    // Remaining bytes are model + firmwareVersion strings.
+    // Try different field sizes to find the split point.
+    // The model and firmware version are null-terminated within their fields.
+    const remainingStr = r.remaining > 0 ? r.readRemainingBytes() : new Uint8Array(0);
+
+    // Find the first null-terminated string (model), then the second (firmware version)
+    let model = "";
+    let firmwareVersion = "";
+    if (remainingStr.length > 0) {
+      // Scan for pattern: model string, then padding zeros, then firmware string
+      const firstNull = remainingStr.indexOf(0);
+      if (firstNull >= 0) {
+        model = new TextDecoder().decode(remainingStr.slice(0, firstNull));
+        // Find where the next non-zero byte starts (firmware version)
+        let fwStart = firstNull + 1;
+        while (fwStart < remainingStr.length && remainingStr[fwStart] === 0) fwStart++;
+        if (fwStart < remainingStr.length) {
+          const fwEnd = remainingStr.indexOf(0, fwStart);
+          firmwareVersion = new TextDecoder().decode(
+            remainingStr.slice(fwStart, fwEnd >= 0 ? fwEnd : remainingStr.length),
+          );
+        }
+      } else {
+        model = new TextDecoder().decode(remainingStr);
+      }
+    }
 
     console.error(
-      `[DEBUG] Parsed DeviceInfo: firmwareVer=${firmwareVer} model="${model}" firmwareVersion="${firmwareVersion}" buildDate="${buildDate}"`,
+      `[DEBUG] Parsed DeviceInfo: firmwareVer=${firmwareVer} model="${model}" firmwareVersion="${firmwareVersion}" buildDate="${buildDate}" remainingLen=${remainingStr.length}`,
     );
     const info: DeviceInfo = {
       firmwareVer,
