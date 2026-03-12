@@ -273,20 +273,15 @@ export default function App({ client, deviceKey }: AppProps) {
       ]
     : [];
 
-  // Add channel items to config
+  // Add channel items to config (editable names)
   const allConfigItems: ConfigField[] = [
     ...configItems,
+    { key: "ch_header", label: "── Channels ──", value: "", type: "readonly" },
     ...channels.map((ch) => ({
       key: `ch${ch.index}`,
       label: `CH${ch.index}`,
       value: ch.name || "(empty)",
-      type: "action" as const,
-      action: async () => {
-        setChatTarget(`ch${ch.index}`);
-        setChatChannel(ch.index);
-        addSystemMessage(`Switched to CH${ch.index}`);
-        setMode("chat");
-      },
+      type: "text" as const,
     })),
   ];
 
@@ -319,6 +314,17 @@ export default function App({ client, deviceKey }: AppProps) {
           addSystemMessage(`TX power set to ${power} dBm`);
           setSelfInfo((prev) => prev ? { ...prev, txPower: power } : prev);
         }
+      } else if (editingConfig.startsWith("ch")) {
+        const idx = parseInt(editingConfig.slice(2), 10);
+        const ch = channels.find((c) => c.index === idx);
+        const secret = ch?.secret ?? new Uint8Array(16);
+        await client.setChannel(idx, editValue, secret);
+        addSystemMessage(`CH${idx} name set to: ${editValue}`);
+        // Refresh channels
+        try {
+          const chs = await client.getAllChannels();
+          setChannels(chs);
+        } catch {}
       }
     } catch (e: any) {
       setError(e.message);
