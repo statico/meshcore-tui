@@ -66,6 +66,9 @@ export default function App({ client }: AppProps) {
   const [editingConfig, setEditingConfig] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
 
+  // Chat input focus state (modal input like meshtastic-cli)
+  const [chatInputFocused, setChatInputFocused] = useState(false);
+
   // Confirmation dialog state
   const [confirmAction, setConfirmAction] = useState<{ label: string; action: () => Promise<void> } | null>(null);
 
@@ -74,7 +77,7 @@ export default function App({ client }: AppProps) {
   const batchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seenMsgHashes = useRef<Set<string>>(new Set());
 
-  const inputActive = (mode === "chat" || editingConfig !== null) && !confirmAction;
+  const inputActive = ((mode === "chat" && chatInputFocused) || editingConfig !== null) && !confirmAction;
 
   // Initialize
   useEffect(() => {
@@ -369,23 +372,41 @@ export default function App({ client }: AppProps) {
       return;
     }
 
-    // ── CHAT MODE ──
+    // ── CHAT MODE (modal input) ──
     if (mode === "chat") {
-      if (key.tab) { setMode("nodes"); return; }
-      return; // TextInput handles all other keys
-    }
-
-    // ── NON-CHAT MODES ──
-    if (key.return && mode !== "config") { setMode("chat"); return; }
-    if (key.escape) { setMode("chat"); return; }
-
-    if (key.tab) {
-      setMode((v) =>
-        v === "nodes" ? "info" : v === "info" ? "config" : v === "config" ? "help" : "nodes",
-      );
+      if (chatInputFocused) {
+        if (key.escape) { setChatInputFocused(false); return; }
+        return; // TextInput handles all other keys when focused
+      }
+      // Not focused — keyboard shortcuts work
+      if (key.return) { setChatInputFocused(true); return; }
+      if (key.tab || ch === "]") { setMode("nodes"); return; }
+      if (ch === "[") { setMode("help"); return; }
+      if (ch === "2") { setMode("nodes"); return; }
+      if (ch === "3") { setMode("info"); return; }
+      if (ch === "4") { setMode("config"); return; }
+      if (ch === "?") { setMode("help"); return; }
       return;
     }
 
+    // ── NON-CHAT MODES ──
+    if (key.escape) { setMode("chat"); return; }
+
+    // Tab and [] cycle views
+    const modeOrder: Mode[] = ["chat", "nodes", "info", "config", "help"];
+    if (key.tab || ch === "]") {
+      const idx = modeOrder.indexOf(mode);
+      setMode(modeOrder[(idx + 1) % modeOrder.length]);
+      return;
+    }
+    if (ch === "[") {
+      const idx = modeOrder.indexOf(mode);
+      setMode(modeOrder[(idx - 1 + modeOrder.length) % modeOrder.length]);
+      return;
+    }
+
+    // Number keys and Enter
+    if (key.return && mode !== "config") { setMode("chat"); return; }
     if (ch === "1") { setMode("chat"); return; }
     if (ch === "2") { setMode("nodes"); return; }
     if (ch === "3") { setMode("info"); return; }
@@ -459,46 +480,42 @@ export default function App({ client }: AppProps) {
         borderStyle="single"
         borderColor={theme.border.focused}
         paddingX={1}
-        justifyContent="space-between"
       >
-        <Box gap={1}>
-          <Text bold color={theme.fg.accent}>▓▓ MESHCORE</Text>
-          <Text color={theme.fg.muted}>│</Text>
-          <Text color={status === "connected" ? theme.status.online : theme.status.offline}>
-            {status === "connected" ? "● ONLINE" : "○ OFFLINE"}
-          </Text>
-          {selfInfo && (
-            <>
-              <Text color={theme.fg.muted}>│</Text>
-              <Text color={theme.fg.primary}>{selfInfo.name}</Text>
-            </>
-          )}
-          {battery !== null && (
-            <>
-              <Text color={theme.fg.muted}>│</Text>
-              <Text color={batteryColor(battery)}>⚡{battery}%</Text>
-            </>
-          )}
-          {contacts.length > 0 && (
-            <>
-              <Text color={theme.fg.muted}>│</Text>
-              <Text color={theme.fg.secondary}>{contacts.length} nodes</Text>
-            </>
-          )}
-        </Box>
-        <Box gap={0}>
-          <NavTab num="1" label="CHAT" active={mode === "chat"} />
-          <Text> </Text>
-          <NavTab num="2" label="NODES" active={mode === "nodes"} />
-          <Text> </Text>
-          <NavTab num="3" label="INFO" active={mode === "info"} />
-          <Text> </Text>
-          <NavTab num="4" label="CFG" active={mode === "config"} />
-          <Text> </Text>
-          <Text color={theme.fg.muted}>
-            <Text color={theme.fg.secondary}>?</Text>help
-          </Text>
-        </Box>
+        <Text bold color={theme.fg.accent}>▓▓ MESHCORE</Text>
+        <Text color={theme.fg.muted}> │ </Text>
+        <Text color={status === "connected" ? theme.status.online : theme.status.offline}>
+          {status === "connected" ? "● ONLINE" : "○ OFFLINE"}
+        </Text>
+        {selfInfo && (
+          <>
+            <Text color={theme.fg.muted}> │ </Text>
+            <Text color={theme.fg.primary}>{selfInfo.name}</Text>
+          </>
+        )}
+        {battery !== null && (
+          <>
+            <Text color={theme.fg.muted}> │ </Text>
+            <Text color={batteryColor(battery)}>⚡{battery}%</Text>
+          </>
+        )}
+        {contacts.length > 0 && (
+          <>
+            <Text color={theme.fg.muted}> │ </Text>
+            <Text color={theme.fg.secondary}>{contacts.length} nodes</Text>
+          </>
+        )}
+        <Box flexGrow={1} />
+        <NavTab num="1" label="CHAT" active={mode === "chat"} />
+        <Text> </Text>
+        <NavTab num="2" label="NODES" active={mode === "nodes"} />
+        <Text> </Text>
+        <NavTab num="3" label="INFO" active={mode === "info"} />
+        <Text> </Text>
+        <NavTab num="4" label="CFG" active={mode === "config"} />
+        <Text> </Text>
+        <Text color={theme.fg.muted}>
+          <Text color={theme.fg.secondary}>?</Text>help
+        </Text>
       </Box>
 
       {/* ═══ CONFIRMATION DIALOG ═══ */}
@@ -571,11 +588,22 @@ export default function App({ client }: AppProps) {
             <TextInput value={editValue} onChange={setEditValue} onSubmit={() => commitConfigEdit()} />
             <Text color={theme.fg.muted}> (Enter=save, Esc=cancel)</Text>
           </>
-        ) : mode === "chat" ? (
+        ) : mode === "chat" && chatInputFocused ? (
           <>
             <Text color={theme.fg.accent} bold>[{targetLabel}]</Text>
             <Text color={theme.fg.accent}>{" ❯ "}</Text>
             <TextInput value={input} onChange={setInput} onSubmit={handleChatSubmit} />
+          </>
+        ) : mode === "chat" ? (
+          <>
+            <Text color={theme.fg.muted}>[{targetLabel}] </Text>
+            <KeyHint k="Enter" desc="=type" />
+            <Text color={theme.fg.muted}>│ </Text>
+            <KeyHint k="Tab/]" desc="=next" />
+            <Text color={theme.fg.muted}>│ </Text>
+            <KeyHint k="[" desc="=prev" />
+            <Text color={theme.fg.muted}>│ </Text>
+            <KeyHint k="?" desc="=help" />
           </>
         ) : (
           <>
@@ -1004,22 +1032,16 @@ function ConfigView({
 function HelpView() {
   return (
     <Box flexDirection="column" paddingX={2} paddingY={1}>
-      <Text color={theme.fg.accent} bold>
-        {"╔══════════════════════════════════════════════╗"}
-      </Text>
-      <Text color={theme.fg.accent} bold>
-        {"║         ▓▓ MESHCORE-TUI  HELP ▓▓            ║"}
-      </Text>
-      <Text color={theme.fg.accent} bold>
-        {"╚══════════════════════════════════════════════╝"}
-      </Text>
+      <Text color={theme.fg.accent} bold>MESHCORE-TUI HELP</Text>
+      <Text color={theme.border.normal}>{"─".repeat(46)}</Text>
 
       <Box marginTop={1} flexDirection="column">
         <Text color={theme.message.channel} bold>Navigation</Text>
         <Text color={theme.border.normal}>{"─".repeat(46)}</Text>
         <HelpRow keys="1 / 2 / 3 / 4" desc="Chat / Nodes / Info / Config" />
-        <HelpRow keys="Tab" desc="Cycle through views" />
-        <HelpRow keys="Enter / Esc" desc="Return to chat" />
+        <HelpRow keys="Tab / ]" desc="Next view" />
+        <HelpRow keys="[" desc="Previous view" />
+        <HelpRow keys="Esc" desc="Return to chat" />
         <HelpRow keys="?" desc="Toggle this help screen" />
         <HelpRow keys="Ctrl+C" desc="Quit" />
       </Box>
@@ -1027,7 +1049,8 @@ function HelpView() {
       <Box marginTop={1} flexDirection="column">
         <Text color={theme.message.channel} bold>Chat</Text>
         <Text color={theme.border.normal}>{"─".repeat(46)}</Text>
-        <HelpRow keys="Type + Enter" desc="Send message to current target" />
+        <HelpRow keys="Enter" desc="Focus input to type" />
+        <HelpRow keys="Esc" desc="Unfocus input" />
         <HelpRow keys="/to <target>" desc="Set target (name, public, ch#)" />
       </Box>
 
