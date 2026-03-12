@@ -10,7 +10,7 @@ import { DEFAULT_TCP_PORT } from "./protocol/constants";
 function usage(): never {
   console.log(`Usage: meshcore-tui <address> [options]
 
-  Terminal UI for MeshCore mesh radios.
+  ▓▓ MESHCORE-TUI — Cyberpunk terminal UI for MeshCore mesh radios
 
   Arguments:
     address              Device IP address or hostname
@@ -19,19 +19,22 @@ function usage(): never {
     -p, --port <port>    TCP port (default: ${DEFAULT_TCP_PORT})
     -h, --help           Show this help
 
-  In-app commands:
+  Keybindings:
+    1 / 2 / 3            Switch to Chat / Nodes / Info
+    Tab                  Cycle views
+    ?                    Toggle help
+    j / k                Navigate (nodes view)
+    Ctrl+C               Quit
+
+  Commands:
     /to <name|public|ch#>  Set chat target
     /contacts              Show contacts
     /info                  Show device info
-    /advert                Send advertisement
+    /advert                Send advertisement beacon
     /name <name>           Set device name
     /refresh               Reload contacts
-    /reboot                Reboot device
+    /reboot                Reboot the radio
     /quit                  Exit
-
-  Navigation:
-    Tab                    Switch between views
-    Ctrl+C                 Quit
 `);
   process.exit(0);
 }
