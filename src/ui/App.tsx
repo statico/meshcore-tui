@@ -66,12 +66,15 @@ export default function App({ client }: AppProps) {
   const [editingConfig, setEditingConfig] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
 
+  // Confirmation dialog state
+  const [confirmAction, setConfirmAction] = useState<{ label: string; action: () => Promise<void> } | null>(null);
+
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pendingMsgsRef = useRef<ReceivedMessage[]>([]);
   const batchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seenMsgHashes = useRef<Set<string>>(new Set());
 
-  const inputActive = mode === "chat" || editingConfig !== null;
+  const inputActive = (mode === "chat" || editingConfig !== null) && !confirmAction;
 
   // Initialize
   useEffect(() => {
@@ -192,8 +195,13 @@ export default function App({ client }: AppProps) {
           value: "press Enter",
           type: "action",
           action: async () => {
-            await client.sendAdvert();
-            addSystemMessage("Advertisement beacon sent");
+            setConfirmAction({
+              label: "Send advertisement beacon?",
+              action: async () => {
+                await client.sendAdvert();
+                addSystemMessage("Advertisement beacon sent");
+              },
+            });
           },
         },
         {
@@ -202,8 +210,13 @@ export default function App({ client }: AppProps) {
           value: "press Enter",
           type: "action",
           action: async () => {
-            await client.reboot();
-            addSystemMessage("Device rebooting...");
+            setConfirmAction({
+              label: "Reboot device? This will disconnect you.",
+              action: async () => {
+                await client.reboot();
+                addSystemMessage("Device rebooting...");
+              },
+            });
           },
         },
       ]
@@ -337,6 +350,18 @@ export default function App({ client }: AppProps) {
   useInput((ch, key) => {
     if (error) setError(null);
 
+    // ── CONFIRMATION DIALOG ──
+    if (confirmAction) {
+      if (ch === "y" || ch === "Y") {
+        const action = confirmAction.action;
+        setConfirmAction(null);
+        action().catch((e: any) => setError(e.message));
+      } else {
+        setConfirmAction(null);
+      }
+      return;
+    }
+
     // ── CONFIG EDITING MODE ──
     if (editingConfig) {
       if (key.escape) { setEditingConfig(null); return; }
@@ -392,14 +417,18 @@ export default function App({ client }: AppProps) {
           addSystemMessage(`Refreshed: ${cl.length} contacts`);
         }).catch(() => {});
       } else if (ch === "x" && contacts[selectedNode]) {
-        // Remove contact
+        // Remove contact with confirmation
         const c = contacts[selectedNode];
-        client.removeContact(c.publicKey).then(async () => {
-          addSystemMessage(`Removed: ${c.name}`);
-          const cl = await client.getContacts();
-          setContacts(cl);
-          setSelectedNode((s) => Math.min(s, cl.length - 1));
-        }).catch(() => {});
+        setConfirmAction({
+          label: `Remove contact "${c.name}"?`,
+          action: async () => {
+            await client.removeContact(c.publicKey);
+            addSystemMessage(`Removed: ${c.name}`);
+            const cl = await client.getContacts();
+            setContacts(cl);
+            setSelectedNode((s) => Math.min(s, cl.length - 1));
+          },
+        });
       }
     }
 
@@ -469,6 +498,14 @@ export default function App({ client }: AppProps) {
           <Text color={theme.fg.muted}>?=help</Text>
         </Box>
       </Box>
+
+      {/* ═══ CONFIRMATION DIALOG ═══ */}
+      {confirmAction && (
+        <Box paddingX={1}>
+          <Text color={theme.status.warning} bold>▶ {confirmAction.label}</Text>
+          <Text color={theme.fg.muted}> (y/n)</Text>
+        </Box>
+      )}
 
       {/* ═══ ERROR BANNER ═══ */}
       {error && (
