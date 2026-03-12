@@ -242,23 +242,49 @@ export class MeshCoreClient extends EventEmitter {
       throw new Error(`APP_START failed: code ${resp[0]}`);
     }
     const r = new BufferReader(resp.slice(1));
+
+    // Debug: dump raw hex for protocol debugging
+    console.error(
+      `[DEBUG] SELF_INFO response (${resp.length} bytes): ${toHex(resp.slice(0, Math.min(70, resp.length)))}...`,
+    );
+
+    const type = r.readByte();
+    const txPower = r.readByte();
+    const maxTxPower = r.readByte();
+    const publicKey = r.readBytes(32);
+    const lat = r.readInt32LE() / 1e6;
+    const lon = r.readInt32LE() / 1e6;
+
+    // After base fields (43 bytes), remaining bytes contain:
+    // manualAddContacts(1) freq(4) bw(4) sf(1) cr(1) name(var)
+    // Note: multiAcks/advertLocPolicy/telemetryMode only present with appVer >= 3
+    const manualAddContacts = r.remaining >= 1 ? r.readByte() : 0;
+    const freq = r.remaining >= 4 ? r.readUInt32LE() / 1000 : 0;
+    const bw = r.remaining >= 4 ? r.readUInt32LE() / 1000 : 0;
+    const sf = r.remaining >= 1 ? r.readByte() : 0;
+    const cr = r.remaining >= 1 ? r.readByte() : 0;
+    const name = r.remaining > 0 ? r.readRemainingString() : "";
+
+    console.error(
+      `[DEBUG] Parsed SelfInfo: freq=${freq} bw=${bw} sf=${sf} cr=${cr} name="${name}"`,
+    );
+
     const info: SelfInfo = {
-      type: r.readByte(),
-      txPower: r.readByte(),
-      maxTxPower: r.readByte(),
-      publicKey: r.readBytes(32),
-      lat: r.readInt32LE() / 1e6,
-      lon: r.readInt32LE() / 1e6,
-      // 3 bytes before manualAddContacts: multiAcks, advertLocPolicy, telemetryMode
-      multiAcks: r.remaining >= 1 ? r.readByte() : 0,
-      advertLocPolicy: r.remaining >= 1 ? r.readByte() : 0,
-      telemetryMode: r.remaining >= 1 ? r.readByte() : 0,
-      manualAddContacts: r.remaining >= 1 ? r.readByte() : 0,
-      freq: r.remaining >= 4 ? r.readUInt32LE() / 1000 : 0,
-      bw: r.remaining >= 4 ? r.readUInt32LE() / 1000 : 0,
-      sf: r.remaining >= 1 ? r.readByte() : 0,
-      cr: r.remaining >= 1 ? r.readByte() : 0,
-      name: r.remaining > 0 ? r.readRemainingString() : "",
+      type,
+      txPower,
+      maxTxPower,
+      publicKey,
+      lat,
+      lon,
+      multiAcks: 0,
+      advertLocPolicy: 0,
+      telemetryMode: 0,
+      manualAddContacts,
+      freq,
+      bw,
+      sf,
+      cr,
+      name,
     };
     this._selfInfo = info;
     return info;
@@ -273,14 +299,24 @@ export class MeshCoreClient extends EventEmitter {
       throw new Error(`DEVICE_QUERY failed: code ${resp[0]}`);
     }
     const r = new BufferReader(resp.slice(1));
+
+    // Debug: dump raw hex for protocol debugging
+    console.error(
+      `[DEBUG] DEVICE_INFO response (${resp.length} bytes): ${toHex(resp.slice(0, Math.min(80, resp.length)))}...`,
+    );
+
     const firmwareVer = r.readByte();
     const maxContactsRaw = r.readByte();
     const maxChannels = r.readByte();
     const blePin = r.readUInt32LE();
     const buildDate = r.readFixedString(12);
-    // Model is 40 bytes, firmware version is 20 bytes
-    const model = r.remaining >= 40 ? r.readFixedString(40) : r.readRemainingString();
-    const firmwareVersion = r.remaining >= 20 ? r.readFixedString(20) : "";
+    // Model is 20 bytes, firmware version is 20 bytes
+    const model = r.remaining >= 20 ? r.readFixedString(20) : r.readRemainingString();
+    const firmwareVersion = r.remaining >= 20 ? r.readFixedString(20) : (r.remaining > 0 ? r.readRemainingString() : "");
+
+    console.error(
+      `[DEBUG] Parsed DeviceInfo: firmwareVer=${firmwareVer} model="${model}" firmwareVersion="${firmwareVersion}" buildDate="${buildDate}"`,
+    );
     const info: DeviceInfo = {
       firmwareVer,
       maxContacts: maxContactsRaw * 2,

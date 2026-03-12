@@ -518,6 +518,7 @@ export default function App({ client }: AppProps) {
             height={rows - 5}
             scrollOffset={scrollOffset}
             targetLabel={targetLabel}
+            cols={cols}
           />
         )}
         {mode === "contacts" && (
@@ -589,11 +590,13 @@ function ChatView({
   height,
   scrollOffset,
   targetLabel,
+  cols,
 }: {
   messages: ChatMessage[];
   height: number;
   scrollOffset: number;
   targetLabel: string;
+  cols: number;
 }) {
   const visibleCount = Math.max(1, height - 2);
   const endIdx = messages.length - scrollOffset;
@@ -647,17 +650,26 @@ function ChatView({
             ? theme.message.system
             : theme.message.other;
 
-        // Fixed-width columns: TIME(10) CHAN(5) SENDER(14) MSG(rest) SNR(opt)
+        // Fixed-width columns: TIME(9) CHAN(6) SENDER(15) SNR(8) MSG(rest)
+        // Truncate message to prevent wrapping
+        const timeCol = time.padEnd(9);
+        const chanCol = chTag.padEnd(6);
+        const senderCol = m.sender.slice(0, 13).padEnd(15);
+        const snrCol = snrStr ? snrStr.padStart(7) : "       ";
+        const fixedWidth = 9 + 6 + 15 + 7 + 4; // columns + padding/gaps
+        const maxMsgLen = Math.max(10, cols - fixedWidth);
+        const msgText = m.text.length > maxMsgLen ? m.text.slice(0, maxMsgLen - 1) + "…" : m.text;
+
         return (
-          <Box key={m.id}>
-            <Text color={theme.fg.muted}>{time} </Text>
+          <Box key={m.id} width={cols - 2}>
+            <Text color={theme.fg.muted}>{timeCol}</Text>
             <Text color={m.channelIdx !== undefined ? theme.message.channel : theme.fg.muted}>
-              {chTag.padEnd(5)}
+              {chanCol}
             </Text>
             <Text color={senderColor} bold={!m.isSelf}>
-              {m.sender.slice(0, 12).padEnd(13)}
+              {senderCol}
             </Text>
-            <Text color={theme.fg.primary}>{m.text}</Text>
+            <Text color={theme.fg.primary}>{msgText}</Text>
             {snrStr && (
               <Text color={m.snr !== undefined ? snrColor(m.snr) : theme.fg.muted}>
                 {" " + snrStr}
