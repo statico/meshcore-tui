@@ -21,6 +21,7 @@ interface ChatMessage {
   isSelf: boolean;
   channelIdx?: number;
   snr?: number;
+  status?: "pending" | "confirmed";
 }
 
 type Mode = "chat" | "nodes" | "info" | "config";
@@ -142,6 +143,20 @@ export default function App({ client, deviceKey }: AppProps) {
         const msgs = await client.syncAllMessages();
         if (msgs.length > 0) batchAddMessages(msgs);
       } catch {}
+    });
+
+    client.on("send_confirmed", () => {
+      // Mark the most recent pending self-message as confirmed
+      setMessages((prev) => {
+        const next = [...prev];
+        for (let i = next.length - 1; i >= 0; i--) {
+          if (next[i].isSelf && next[i].status === "pending") {
+            next[i] = { ...next[i], status: "confirmed" };
+            break;
+          }
+        }
+        return next;
+      });
     });
 
     client.on("disconnected", () => setStatus("disconnected"));
@@ -350,7 +365,7 @@ export default function App({ client, deviceKey }: AppProps) {
           const ts = Math.floor(Date.now() / 1000);
           setMessages((prev) => [
             ...prev,
-            { id: ++msgIdCounter, timestamp: ts, sender: "me", text: value, isSelf: true, channelIdx: chatChannel },
+            { id: ++msgIdCounter, timestamp: ts, sender: "me", text: value, isSelf: true, channelIdx: chatChannel, status: "pending" },
           ]);
           insertMessage({ timestamp: ts, sender: "me", text: value, isSelf: true, channelIdx: chatChannel, deviceKey });
         } else {
@@ -360,7 +375,7 @@ export default function App({ client, deviceKey }: AppProps) {
             const ts = Math.floor(Date.now() / 1000);
             setMessages((prev) => [
               ...prev,
-              { id: ++msgIdCounter, timestamp: ts, sender: "me", text: value, isSelf: true },
+              { id: ++msgIdCounter, timestamp: ts, sender: "me", text: value, isSelf: true, status: "pending" },
             ]);
             insertMessage({ timestamp: ts, sender: "me", text: value, isSelf: true, deviceKey });
           } else {
@@ -432,6 +447,10 @@ export default function App({ client, deviceKey }: AppProps) {
       if (ch === "2") { setMode("nodes"); return; }
       if (ch === "3") { setMode("info"); return; }
       if (ch === "4") { setMode("config"); return; }
+      if (ch === "q") {
+        setConfirmAction({ label: "Quit meshcore-tui?", action: async () => { client.disconnect(); exit(); } });
+        return;
+      }
       if (ch === "?") { setShowHelp(true); return; }
       return;
     }
@@ -458,6 +477,10 @@ export default function App({ client, deviceKey }: AppProps) {
     if (ch === "2") { setMode("nodes"); return; }
     if (ch === "3") { setMode("info"); return; }
     if (ch === "4") { setMode("config"); return; }
+    if (ch === "q") {
+      setConfirmAction({ label: "Quit meshcore-tui?", action: async () => { client.disconnect(); exit(); } });
+      return;
+    }
     if (ch === "?") { setShowHelp(true); return; }
 
     // ── NODES VIEW ──
@@ -838,6 +861,12 @@ function ChatView({
               <Text color={m.snr !== undefined ? snrColor(m.snr) : theme.fg.muted}>
                 {" " + snrStr}
               </Text>
+            )}
+            {m.isSelf && m.status === "pending" && (
+              <Text color={theme.fg.muted}> [···]</Text>
+            )}
+            {m.isSelf && m.status === "confirmed" && (
+              <Text color={theme.status.online}> [✓]</Text>
             )}
           </Box>
         );
