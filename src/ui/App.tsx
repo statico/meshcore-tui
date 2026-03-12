@@ -11,6 +11,7 @@ import type {
 } from "../protocol/client";
 import { toHex } from "../protocol/buffer";
 import { theme, snrColor, batteryColor, contactColor } from "./theme";
+import { getMessages, insertMessage, type DbMessage } from "../db";
 
 interface ChatMessage {
   id: number;
@@ -37,9 +38,10 @@ interface ConfigField {
 
 interface AppProps {
   client: MeshCoreClient;
+  deviceKey: string;
 }
 
-export default function App({ client }: AppProps) {
+export default function App({ client, deviceKey }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const rows = stdout?.rows ?? 24;
@@ -83,6 +85,25 @@ export default function App({ client }: AppProps) {
   useEffect(() => {
     (async () => {
       try {
+        // Load persisted messages from SQLite
+        const saved = getMessages(deviceKey);
+        if (saved.length > 0) {
+          const restored: ChatMessage[] = saved.map((m) => {
+            const hash = `${m.timestamp}-${m.isSelf ? "self" : "msg"}-${m.text.slice(0, 30)}`;
+            seenMsgHashes.current.add(hash);
+            return {
+              id: ++msgIdCounter,
+              timestamp: m.timestamp,
+              sender: m.sender,
+              text: m.text,
+              isSelf: m.isSelf,
+              channelIdx: m.channelIdx,
+              snr: m.snr,
+            };
+          });
+          setMessages(restored);
+        }
+
         setSelfInfo(client.selfInfo);
         try {
           const info = await client.deviceQuery();
@@ -148,7 +169,7 @@ export default function App({ client }: AppProps) {
             seenMsgHashes.current = new Set(arr.slice(-1000));
           }
           const sender = client.resolveContactName(m.senderKey);
-          next.push({
+          const chatMsg: ChatMessage = {
             id: ++msgIdCounter,
             timestamp: m.timestamp,
             sender,
@@ -156,6 +177,16 @@ export default function App({ client }: AppProps) {
             isSelf: false,
             channelIdx: m.channelIdx,
             snr: m.snr,
+          };
+          next.push(chatMsg);
+          insertMessage({
+            timestamp: chatMsg.timestamp,
+            sender: chatMsg.sender,
+            text: chatMsg.text,
+            isSelf: false,
+            channelIdx: chatMsg.channelIdx,
+            snr: chatMsg.snr,
+            deviceKey,
           });
         }
         return next.slice(-500);
@@ -314,31 +345,22 @@ export default function App({ client }: AppProps) {
       try {
         if (chatTarget === "public" || chatTarget.startsWith("ch")) {
           await client.sendChannelMessage(chatChannel, value);
+          const ts = Math.floor(Date.now() / 1000);
           setMessages((prev) => [
             ...prev,
-            {
-              id: ++msgIdCounter,
-              timestamp: Math.floor(Date.now() / 1000),
-              sender: "me",
-              text: value,
-              isSelf: true,
-              channelIdx: chatChannel,
-            },
+            { id: ++msgIdCounter, timestamp: ts, sender: "me", text: value, isSelf: true, channelIdx: chatChannel },
           ]);
+          insertMessage({ timestamp: ts, sender: "me", text: value, isSelf: true, channelIdx: chatChannel, deviceKey });
         } else {
           const contact = client.findContact(chatTarget);
           if (contact) {
             await client.sendTextMessage(contact.publicKey, value);
+            const ts = Math.floor(Date.now() / 1000);
             setMessages((prev) => [
               ...prev,
-              {
-                id: ++msgIdCounter,
-                timestamp: Math.floor(Date.now() / 1000),
-                sender: "me",
-                text: value,
-                isSelf: true,
-              },
+              { id: ++msgIdCounter, timestamp: ts, sender: "me", text: value, isSelf: true },
             ]);
+            insertMessage({ timestamp: ts, sender: "me", text: value, isSelf: true, deviceKey });
           } else {
             setError(`Contact not found: ${chatTarget}`);
           }
