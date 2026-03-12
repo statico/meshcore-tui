@@ -487,15 +487,17 @@ export default function App({ client }: AppProps) {
           )}
         </Box>
         <Box gap={0}>
-          <ModeTab label="1⟩CHAT" active={mode === "chat"} />
+          <NavTab num="1" label="CHAT" active={mode === "chat"} />
           <Text> </Text>
-          <ModeTab label="2⟩NODES" active={mode === "nodes"} />
+          <NavTab num="2" label="NODES" active={mode === "nodes"} />
           <Text> </Text>
-          <ModeTab label="3⟩INFO" active={mode === "info"} />
+          <NavTab num="3" label="INFO" active={mode === "info"} />
           <Text> </Text>
-          <ModeTab label="4⟩CFG" active={mode === "config"} />
+          <NavTab num="4" label="CFG" active={mode === "config"} />
           <Text> </Text>
-          <Text color={theme.fg.muted}>?=help</Text>
+          <Text color={theme.fg.muted}>
+            <Text color={theme.fg.secondary}>?</Text>help
+          </Text>
         </Box>
       </Box>
 
@@ -577,11 +579,37 @@ export default function App({ client }: AppProps) {
           </>
         ) : (
           <>
-            <Text color={theme.fg.muted}>
-              {mode === "nodes" ? "j/k nav │ d=DM │ a=advert │ r=refresh │ x=remove │ Enter=chat"
-                : mode === "config" ? "j/k nav │ Enter=edit/activate │ Esc=chat"
-                : "Enter/Esc=chat │ 1-4=views │ ?=help"}
-            </Text>
+            {mode === "nodes" ? (
+              <Text>
+                <KeyHint k="j/k" desc=" nav" />
+                <Text color={theme.fg.muted}>│ </Text>
+                <KeyHint k="d" desc="=DM" />
+                <Text color={theme.fg.muted}>│ </Text>
+                <KeyHint k="a" desc="=advert" />
+                <Text color={theme.fg.muted}>│ </Text>
+                <KeyHint k="r" desc="=refresh" />
+                <Text color={theme.fg.muted}>│ </Text>
+                <KeyHint k="x" desc="=remove" />
+                <Text color={theme.fg.muted}>│ </Text>
+                <KeyHint k="Enter" desc="=chat" />
+              </Text>
+            ) : mode === "config" ? (
+              <Text>
+                <KeyHint k="j/k" desc=" nav" />
+                <Text color={theme.fg.muted}>│ </Text>
+                <KeyHint k="Enter" desc="=edit" />
+                <Text color={theme.fg.muted}>│ </Text>
+                <KeyHint k="Esc" desc="=chat" />
+              </Text>
+            ) : (
+              <Text>
+                <KeyHint k="Enter/Esc" desc="=chat" />
+                <Text color={theme.fg.muted}>│ </Text>
+                <KeyHint k="1-4" desc="=views" />
+                <Text color={theme.fg.muted}>│ </Text>
+                <KeyHint k="?" desc="=help" />
+              </Text>
+            )}
           </>
         )}
       </Box>
@@ -591,10 +619,22 @@ export default function App({ client }: AppProps) {
 
 // ─── Sub-components ──────────────────────────────────────────────
 
-function ModeTab({ label, active }: { label: string; active: boolean }) {
+function NavTab({ num, label, active }: { num: string; label: string; active: boolean }) {
   return (
-    <Text color={active ? theme.fg.accent : theme.fg.muted} bold={active}>
-      {active ? `[${label}]` : ` ${label} `}
+    <Text>
+      <Text color={active ? theme.fg.accent : theme.fg.muted}>{num}</Text>
+      <Text color={active ? theme.fg.accent : theme.fg.muted}>⟩</Text>
+      <Text bold={active} color={active ? theme.fg.accent : theme.fg.secondary}>{label}</Text>
+    </Text>
+  );
+}
+
+/** Render keybinding hint: key in accent, description in muted */
+function KeyHint({ k, desc }: { k: string; desc: string }) {
+  return (
+    <Text>
+      <Text color={theme.fg.secondary}>{k}</Text>
+      <Text color={theme.fg.muted}>{desc} </Text>
     </Text>
   );
 }
@@ -914,7 +954,9 @@ function ConfigView({
     <Box flexDirection="column" paddingX={1}>
       <Box>
         <Text color={theme.fg.accent} bold>CONFIG</Text>
-        <Text color={theme.fg.muted}> — j/k navigate, Enter edit/activate</Text>
+        <Text color={theme.fg.muted}> — </Text>
+        <KeyHint k="j/k" desc=" nav" />
+        <KeyHint k="Enter" desc=" edit/activate" />
       </Box>
 
       {visible.map((item, i) => {
@@ -1018,7 +1060,7 @@ function HelpView() {
 function HelpRow({ keys, desc }: { keys: string; desc: string }) {
   return (
     <Box>
-      <Text color={theme.fg.accent}> {keys.padEnd(20)}</Text>
+      <Text color={theme.fg.secondary}> {keys.padEnd(20)}</Text>
       <Text color={theme.fg.primary}>{desc}</Text>
     </Box>
   );
