@@ -402,7 +402,24 @@ export default function App({ client, deviceKey }: AppProps) {
       }
       // Not focused — keyboard shortcuts work
       if (key.return) { setChatInputFocused(true); return; }
-      if (key.tab || ch === "]") { setMode("nodes"); return; }
+      // Tab/Shift-Tab cycle through channels (like meshtastic-cli)
+      if (key.tab && key.shift) {
+        // Shift-Tab: previous channel
+        const maxCh = channels.length > 0 ? channels.length - 1 : 0;
+        const prev = chatChannel > 0 ? chatChannel - 1 : maxCh;
+        setChatChannel(prev);
+        setChatTarget(prev === 0 ? "public" : `ch${prev}`);
+        return;
+      }
+      if (key.tab) {
+        // Tab: next channel
+        const maxCh = channels.length > 0 ? channels.length - 1 : 0;
+        const next = chatChannel < maxCh ? chatChannel + 1 : 0;
+        setChatChannel(next);
+        setChatTarget(next === 0 ? "public" : `ch${next}`);
+        return;
+      }
+      if (ch === "]") { setMode("nodes"); return; }
       if (ch === "[") { setMode("help"); return; }
       if (ch === "2") { setMode("nodes"); return; }
       if (ch === "3") { setMode("info"); return; }
@@ -533,11 +550,9 @@ export default function App({ client, deviceKey }: AppProps) {
         <Text> </Text>
         <NavTab num="3" label="INFO" active={mode === "info"} />
         <Text> </Text>
-        <NavTab num="4" label="CFG" active={mode === "config"} />
+        <NavTab num="4" label="CONF" active={mode === "config"} />
         <Text> </Text>
-        <Text color={theme.fg.muted}>
-          <Text color={theme.fg.secondary}>?</Text>help
-        </Text>
+        <NavTab num="?" label="HELP" active={mode === "help"} />
       </Box>
 
       {/* ═══ CONFIRMATION DIALOG ═══ */}
@@ -564,6 +579,9 @@ export default function App({ client, deviceKey }: AppProps) {
             scrollOffset={scrollOffset}
             targetLabel={targetLabel}
             cols={cols}
+            channels={channels}
+            chatChannel={chatChannel}
+            chatTarget={chatTarget}
           />
         )}
         {mode === "nodes" && (
@@ -621,9 +639,11 @@ export default function App({ client, deviceKey }: AppProps) {
             <Text color={theme.fg.muted}>[{targetLabel}] </Text>
             <KeyHint k="Enter" desc="=type" />
             <Text color={theme.fg.muted}>│ </Text>
-            <KeyHint k="Tab/]" desc="=next" />
+            <KeyHint k="Tab" desc="=next ch" />
             <Text color={theme.fg.muted}>│ </Text>
-            <KeyHint k="[" desc="=prev" />
+            <KeyHint k="S-Tab" desc="=prev ch" />
+            <Text color={theme.fg.muted}>│ </Text>
+            <KeyHint k="]" desc="=next view" />
             <Text color={theme.fg.muted}>│ </Text>
             <KeyHint k="?" desc="=help" />
           </>
@@ -697,26 +717,67 @@ function ChatView({
   scrollOffset,
   targetLabel,
   cols,
+  channels,
+  chatChannel,
+  chatTarget,
 }: {
   messages: ChatMessage[];
   height: number;
   scrollOffset: number;
   targetLabel: string;
   cols: number;
+  channels: ChannelInfo[];
+  chatChannel: number;
+  chatTarget: string;
 }) {
-  const visibleCount = Math.max(1, height - 2);
+  const isDM = chatTarget !== "public" && !chatTarget.startsWith("ch");
+  const visibleCount = Math.max(1, height - 3);
   const endIdx = messages.length - scrollOffset;
   const startIdx = Math.max(0, endIdx - visibleCount);
   const visible = messages.slice(startIdx, Math.max(0, endIdx));
 
   return (
     <Box flexDirection="column" paddingX={1}>
+      {/* Channel selector bar */}
       <Box>
-        <Text color={theme.fg.accent} bold>═══ MESSAGES</Text>
-        <Text color={theme.fg.muted}> → </Text>
-        <Text color={theme.message.channel} bold>{targetLabel}</Text>
+        <Text color={theme.fg.muted}>Channel: </Text>
+        {channels.length > 0 ? (
+          channels.map((ch) => {
+            const isActive = !isDM && chatChannel === ch.index;
+            return (
+              <Text key={ch.index}>
+                <Text color={isActive ? theme.fg.accent : ch.name ? theme.fg.primary : theme.fg.muted} bold={isActive}>
+                  {isActive ? `[${ch.index}]` : ` ${ch.index} `}
+                </Text>
+              </Text>
+            );
+          })
+        ) : (
+          <Text color={theme.fg.muted}>[0]</Text>
+        )}
+        {isDM && (
+          <>
+            <Text color={theme.fg.muted}> │ </Text>
+            <Text color={theme.fg.accent} bold>DM:{chatTarget}</Text>
+          </>
+        )}
+        <Text color={theme.fg.muted}> (Tab/S-Tab)</Text>
+      </Box>
+      <Box>
+        {isDM ? (
+          <Text color={theme.fg.accent}>DM → {chatTarget}</Text>
+        ) : (
+          <>
+            <Text color={theme.fg.muted}>Name: </Text>
+            <Text color={theme.fg.accent}>
+              {channels.find((c) => c.index === chatChannel)?.name || "(default)"}
+            </Text>
+            <Text color={theme.fg.muted}>  Target: </Text>
+            <Text color={theme.message.channel}>{targetLabel}</Text>
+          </>
+        )}
         {messages.length > 0 && (
-          <Text color={theme.fg.muted}> ({messages.length} total)</Text>
+          <Text color={theme.fg.muted}>  ({messages.length} msgs)</Text>
         )}
       </Box>
 
@@ -1073,6 +1134,7 @@ function HelpView() {
         <Text color={theme.border.normal}>{"─".repeat(46)}</Text>
         <HelpRow keys="Enter" desc="Focus input to type" />
         <HelpRow keys="Esc" desc="Unfocus input" />
+        <HelpRow keys="Tab / Shift-Tab" desc="Next / previous channel" />
         <HelpRow keys="/to <target>" desc="Set target (name, public, ch#)" />
       </Box>
 
