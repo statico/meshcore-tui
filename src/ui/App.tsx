@@ -402,22 +402,23 @@ export default function App({ client, deviceKey }: AppProps) {
       }
       // Not focused — keyboard shortcuts work
       if (key.return) { setChatInputFocused(true); return; }
-      // n/p cycle through channels
-      if (ch === "n") {
-        const maxCh = channels.length > 0 ? channels.length - 1 : 0;
-        const next = chatChannel < maxCh ? chatChannel + 1 : 0;
-        setChatChannel(next);
-        setChatTarget(next === 0 ? "public" : `ch${next}`);
-        return;
-      }
-      if (ch === "p") {
+      // Tab/Shift-Tab cycle through channels
+      if (key.tab && key.shift) {
         const maxCh = channels.length > 0 ? channels.length - 1 : 0;
         const prev = chatChannel > 0 ? chatChannel - 1 : maxCh;
         setChatChannel(prev);
         setChatTarget(prev === 0 ? "public" : `ch${prev}`);
         return;
       }
-      if (key.tab || ch === "]") { setMode("nodes"); return; }
+      if (key.tab) {
+        const maxCh = channels.length > 0 ? channels.length - 1 : 0;
+        const next = chatChannel < maxCh ? chatChannel + 1 : 0;
+        setChatChannel(next);
+        setChatTarget(next === 0 ? "public" : `ch${next}`);
+        return;
+      }
+      // [ and ] cycle top-level views
+      if (ch === "]") { setMode("nodes"); return; }
       if (ch === "[") { setMode("help"); return; }
       if (ch === "2") { setMode("nodes"); return; }
       if (ch === "3") { setMode("info"); return; }
@@ -429,9 +430,9 @@ export default function App({ client, deviceKey }: AppProps) {
     // ── NON-CHAT MODES ──
     if (key.escape) { setMode("chat"); return; }
 
-    // Tab and [] cycle views
+    // [] cycle views
     const modeOrder: Mode[] = ["chat", "nodes", "info", "config", "help"];
-    if (key.tab || ch === "]") {
+    if (ch === "]") {
       const idx = modeOrder.indexOf(mode);
       setMode(modeOrder[(idx + 1) % modeOrder.length]);
       return;
@@ -637,9 +638,9 @@ export default function App({ client, deviceKey }: AppProps) {
             <Text color={theme.fg.muted}>[{targetLabel}] </Text>
             <KeyHint k="Enter" desc="=type" />
             <Text color={theme.fg.muted}>│ </Text>
-            <KeyHint k="n/p" desc="=next/prev ch" />
+            <KeyHint k="Tab" desc="=next ch" />
             <Text color={theme.fg.muted}>│ </Text>
-            <KeyHint k="Tab/]" desc="=next view" />
+            <KeyHint k="]/[" desc="=views" />
             <Text color={theme.fg.muted}>│ </Text>
             <KeyHint k="?" desc="=help" />
           </>
@@ -739,21 +740,27 @@ function ChatView({
       {/* Channel sidebar */}
       <Box flexDirection="column" width={sidebarWidth} borderStyle="single" borderColor={theme.border.normal} borderRight borderTop={false} borderBottom={false} borderLeft={false}>
         <Text color={theme.fg.secondary} bold>CHANNELS</Text>
-        {channels.length > 0 ? (
-          channels.map((ch) => {
+        {(() => {
+          // Always show ch0 as "public", then only named channels
+          const visibleChannels = channels.length > 0
+            ? channels.filter((ch) => ch.index === 0 || ch.name)
+            : [];
+          if (visibleChannels.length === 0) {
+            const isActive = !isDM && chatChannel === 0;
+            return <Text color={isActive ? theme.fg.accent : theme.fg.primary} bold={isActive}>{isActive ? "▶ " : "  "}public</Text>;
+          }
+          return visibleChannels.map((ch) => {
             const isActive = !isDM && chatChannel === ch.index;
-            const label = ch.name || `ch${ch.index}`;
+            const label = ch.index === 0 ? "public" : `#${ch.name}`;
             return (
               <Box key={ch.index}>
-                <Text color={isActive ? theme.fg.accent : ch.name ? theme.fg.primary : theme.fg.muted} bold={isActive}>
+                <Text color={isActive ? theme.fg.accent : theme.fg.primary} bold={isActive}>
                   {isActive ? "▶ " : "  "}{label.slice(0, sidebarWidth - 3)}
                 </Text>
               </Box>
             );
-          })
-        ) : (
-          <Text color={theme.fg.accent} bold>▶ public</Text>
-        )}
+          });
+        })()}
         {isDM && (
           <Box marginTop={1}>
             <Text color={theme.fg.secondary} bold>DM</Text>
@@ -1111,7 +1118,7 @@ function HelpView() {
         <Text color={theme.message.channel} bold>Navigation</Text>
         <Text color={theme.border.normal}>{"─".repeat(46)}</Text>
         <HelpRow keys="1 / 2 / 3 / 4" desc="Chat / Nodes / Info / Config" />
-        <HelpRow keys="Tab / ]" desc="Next view" />
+        <HelpRow keys="]" desc="Next view" />
         <HelpRow keys="[" desc="Previous view" />
         <HelpRow keys="Esc" desc="Return to chat" />
         <HelpRow keys="?" desc="Toggle this help screen" />
@@ -1123,7 +1130,7 @@ function HelpView() {
         <Text color={theme.border.normal}>{"─".repeat(46)}</Text>
         <HelpRow keys="Enter" desc="Focus input to type" />
         <HelpRow keys="Esc" desc="Unfocus input" />
-        <HelpRow keys="n / p" desc="Next / previous channel" />
+        <HelpRow keys="Tab / Shift-Tab" desc="Next / previous channel" />
         <HelpRow keys="/to <target>" desc="Set target (name, public, ch#)" />
       </Box>
 
