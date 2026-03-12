@@ -23,7 +23,7 @@ interface ChatMessage {
   snr?: number;
 }
 
-type Mode = "chat" | "nodes" | "info" | "config" | "help";
+type Mode = "chat" | "nodes" | "info" | "config";
 
 let msgIdCounter = 0;
 
@@ -70,6 +70,8 @@ export default function App({ client, deviceKey }: AppProps) {
 
   // Chat input focus state (modal input like meshtastic-cli)
   const [chatInputFocused, setChatInputFocused] = useState(false);
+  // Context-aware help modal
+  const [showHelp, setShowHelp] = useState(false);
 
   // Confirmation dialog state
   const [confirmAction, setConfirmAction] = useState<{ label: string; action: () => Promise<void> } | null>(null);
@@ -375,6 +377,13 @@ export default function App({ client, deviceKey }: AppProps) {
   useInput((ch, key) => {
     if (error) setError(null);
 
+    // ── HELP MODAL ──
+    if (showHelp) {
+      // Any key dismisses the help modal
+      setShowHelp(false);
+      return;
+    }
+
     // ── CONFIRMATION DIALOG ──
     if (confirmAction) {
       if (ch === "y" || ch === "Y") {
@@ -419,11 +428,11 @@ export default function App({ client, deviceKey }: AppProps) {
       }
       // [ and ] cycle top-level views
       if (ch === "]") { setMode("nodes"); return; }
-      if (ch === "[") { setMode("help"); return; }
+      if (ch === "[") { setMode("config"); return; }
       if (ch === "2") { setMode("nodes"); return; }
       if (ch === "3") { setMode("info"); return; }
       if (ch === "4") { setMode("config"); return; }
-      if (ch === "?") { setMode("help"); return; }
+      if (ch === "?") { setShowHelp(true); return; }
       return;
     }
 
@@ -431,7 +440,7 @@ export default function App({ client, deviceKey }: AppProps) {
     if (key.escape) { setMode("chat"); return; }
 
     // [] cycle views
-    const modeOrder: Mode[] = ["chat", "nodes", "info", "config", "help"];
+    const modeOrder: Mode[] = ["chat", "nodes", "info", "config"];
     if (ch === "]") {
       const idx = modeOrder.indexOf(mode);
       setMode(modeOrder[(idx + 1) % modeOrder.length]);
@@ -449,7 +458,7 @@ export default function App({ client, deviceKey }: AppProps) {
     if (ch === "2") { setMode("nodes"); return; }
     if (ch === "3") { setMode("info"); return; }
     if (ch === "4") { setMode("config"); return; }
-    if (ch === "?") { setMode(mode === "help" ? "chat" : "help"); return; }
+    if (ch === "?") { setShowHelp(true); return; }
 
     // ── NODES VIEW ──
     if (mode === "nodes") {
@@ -551,7 +560,9 @@ export default function App({ client, deviceKey }: AppProps) {
         <Text> </Text>
         <NavTab num="4" label="CONF" active={mode === "config"} />
         <Text> </Text>
-        <NavTab num="?" label="HELP" active={mode === "help"} />
+        <Text color={theme.fg.muted}>
+          <Text color={theme.fg.secondary}>?</Text>help
+        </Text>
       </Box>
 
       {/* ═══ CONFIRMATION DIALOG ═══ */}
@@ -609,8 +620,21 @@ export default function App({ client, deviceKey }: AppProps) {
             height={rows - 5}
           />
         )}
-        {mode === "help" && <HelpView />}
       </Box>
+
+      {/* ═══ HELP MODAL OVERLAY ═══ */}
+      {showHelp && (
+        <Box
+          position="absolute"
+          flexDirection="column"
+          width={cols}
+          height={rows}
+          justifyContent="center"
+          alignItems="center"
+        >
+          <HelpModal mode={mode} cols={cols} rows={rows} />
+        </Box>
+      )}
 
       {/* ═══ INPUT BAR ═══ */}
       <Box
@@ -1106,55 +1130,72 @@ function ConfigView({
   );
 }
 
-// ─── HELP VIEW ───────────────────────────────────────────────────
+// ─── HELP MODAL ──────────────────────────────────────────────────
 
-function HelpView() {
+function HelpModal({ mode, cols, rows }: { mode: Mode; cols: number; rows: number }) {
+  const w = Math.min(56, cols - 4);
+  const sep = "─".repeat(w - 4);
+
   return (
-    <Box flexDirection="column" paddingX={2} paddingY={1}>
-      <Text color={theme.fg.accent} bold>MESHCORE-TUI HELP</Text>
-      <Text color={theme.border.normal}>{"─".repeat(46)}</Text>
+    <Box
+      flexDirection="column"
+      borderStyle="double"
+      borderColor={theme.fg.accent}
+      paddingX={1}
+      paddingY={1}
+      width={w}
+    >
+      <Text color={theme.fg.accent} bold>
+        {mode === "chat" ? "CHAT HELP" : mode === "nodes" ? "NODES HELP" : mode === "info" ? "INFO HELP" : "CONFIG HELP"}
+      </Text>
+      <Text color={theme.border.normal}>{sep}</Text>
 
-      <Box marginTop={1} flexDirection="column">
-        <Text color={theme.message.channel} bold>Navigation</Text>
-        <Text color={theme.border.normal}>{"─".repeat(46)}</Text>
+      {/* Context-specific help */}
+      {mode === "chat" && (
+        <Box flexDirection="column">
+          <HelpRow keys="Enter" desc="Focus input to type" />
+          <HelpRow keys="Esc" desc="Unfocus input" />
+          <HelpRow keys="Tab / Shift-Tab" desc="Next / previous channel" />
+          <HelpRow keys="/to <target>" desc="Set DM target (name, public, ch#)" />
+          <HelpRow keys="/quit" desc="Exit" />
+        </Box>
+      )}
+      {mode === "nodes" && (
+        <Box flexDirection="column">
+          <HelpRow keys="j / k / ↑ / ↓" desc="Navigate node list" />
+          <HelpRow keys="g / G" desc="Jump to top / bottom" />
+          <HelpRow keys="d" desc="DM selected node" />
+          <HelpRow keys="a" desc="Send advertisement beacon" />
+          <HelpRow keys="r" desc="Refresh contacts from device" />
+          <HelpRow keys="x" desc="Remove selected contact" />
+        </Box>
+      )}
+      {mode === "info" && (
+        <Box flexDirection="column">
+          <Text color={theme.fg.muted}>  Device info is read-only.</Text>
+          <Text color={theme.fg.muted}>  Go to Config (4) to change settings.</Text>
+        </Box>
+      )}
+      {mode === "config" && (
+        <Box flexDirection="column">
+          <HelpRow keys="j / k" desc="Navigate config items" />
+          <HelpRow keys="Enter" desc="Edit field or activate action" />
+          <HelpRow keys="Esc" desc="Cancel edit / return to chat" />
+        </Box>
+      )}
+
+      <Text color={theme.border.normal}>{sep}</Text>
+      <Box flexDirection="column">
+        <Text color={theme.fg.secondary} bold>Global</Text>
         <HelpRow keys="1 / 2 / 3 / 4" desc="Chat / Nodes / Info / Config" />
-        <HelpRow keys="]" desc="Next view" />
-        <HelpRow keys="[" desc="Previous view" />
+        <HelpRow keys="] / [" desc="Next / previous view" />
         <HelpRow keys="Esc" desc="Return to chat" />
-        <HelpRow keys="?" desc="Toggle this help screen" />
+        <HelpRow keys="?" desc="Toggle this help" />
         <HelpRow keys="Ctrl+C" desc="Quit" />
       </Box>
 
-      <Box marginTop={1} flexDirection="column">
-        <Text color={theme.message.channel} bold>Chat</Text>
-        <Text color={theme.border.normal}>{"─".repeat(46)}</Text>
-        <HelpRow keys="Enter" desc="Focus input to type" />
-        <HelpRow keys="Esc" desc="Unfocus input" />
-        <HelpRow keys="Tab / Shift-Tab" desc="Next / previous channel" />
-        <HelpRow keys="/to <target>" desc="Set target (name, public, ch#)" />
-      </Box>
-
-      <Box marginTop={1} flexDirection="column">
-        <Text color={theme.message.channel} bold>Nodes</Text>
-        <Text color={theme.border.normal}>{"─".repeat(46)}</Text>
-        <HelpRow keys="j / k / ↑ / ↓" desc="Navigate node list" />
-        <HelpRow keys="g / G" desc="Jump to top / bottom" />
-        <HelpRow keys="d" desc="DM selected node" />
-        <HelpRow keys="a" desc="Send advertisement beacon" />
-        <HelpRow keys="r" desc="Refresh contacts from device" />
-        <HelpRow keys="x" desc="Remove selected contact" />
-      </Box>
-
-      <Box marginTop={1} flexDirection="column">
-        <Text color={theme.message.channel} bold>Config</Text>
-        <Text color={theme.border.normal}>{"─".repeat(46)}</Text>
-        <HelpRow keys="j / k" desc="Navigate config items" />
-        <HelpRow keys="Enter" desc="Edit field or activate action" />
-        <HelpRow keys="Esc" desc="Cancel edit / return to chat" />
-      </Box>
-
       <Box marginTop={1}>
-        <Text color={theme.fg.muted}>Press ? or Enter or Esc to close</Text>
+        <Text color={theme.fg.muted}>Press any key to close</Text>
       </Box>
     </Box>
   );
