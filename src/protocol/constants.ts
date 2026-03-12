@@ -1,0 +1,119 @@
+// MeshCore Companion Radio Protocol Constants
+
+export const FRAME_MARKER_TO_RADIO = 0x3c; // '<'
+export const FRAME_MARKER_FROM_RADIO = 0x3e; // '>'
+export const MAX_FRAME_SIZE = 172;
+export const DEFAULT_TCP_PORT = 5000;
+export const MAX_MSG_LENGTH = 133;
+
+export enum CommandCode {
+  APP_START = 0x01,
+  SEND_TXT_MSG = 0x02,
+  SEND_CHANNEL_TXT_MSG = 0x03,
+  GET_CONTACTS = 0x04,
+  GET_DEVICE_TIME = 0x05,
+  SET_DEVICE_TIME = 0x06,
+  SEND_SELF_ADVERT = 0x07,
+  SET_ADVERT_NAME = 0x08,
+  ADD_UPDATE_CONTACT = 0x09,
+  SYNC_NEXT_MESSAGE = 0x0a,
+  SET_RADIO_PARAMS = 0x0b,
+  SET_RADIO_TX_POWER = 0x0c,
+  RESET_PATH = 0x0d,
+  SET_ADVERT_LATLON = 0x0e,
+  REMOVE_CONTACT = 0x0f,
+  SHARE_CONTACT = 0x10,
+  EXPORT_CONTACT = 0x11,
+  IMPORT_CONTACT = 0x12,
+  REBOOT = 0x13,
+  GET_BATT_AND_STORAGE = 0x14,
+  SET_TUNING_PARAMS = 0x15,
+  DEVICE_QUERY = 0x16,
+  EXPORT_PRIVATE_KEY = 0x17,
+  IMPORT_PRIVATE_KEY = 0x18,
+  SEND_RAW_DATA = 0x19,
+  SEND_LOGIN = 0x1a,
+  SEND_STATUS_REQ = 0x1b,
+  HAS_CONNECTION = 0x1c,
+  LOGOUT = 0x1d,
+  GET_CONTACT_BY_KEY = 0x1e,
+  GET_CHANNEL = 0x1f,
+  SET_CHANNEL = 0x20,
+  SEND_BINARY_REQ = 0x32,
+  FACTORY_RESET = 0x33,
+  SEND_PATH_DISCOVERY_REQ = 0x34,
+  SET_FLOOD_SCOPE = 0x36,
+  SEND_CONTROL_DATA = 0x37,
+  GET_STATS = 0x38,
+  SEND_ANON_REQ = 0x39,
+  SET_AUTOADD_CONFIG = 0x3a,
+  GET_AUTOADD_CONFIG = 0x3b,
+  GET_ALLOWED_REPEAT_FREQ = 0x3c,
+  SET_PATH_HASH_MODE = 0x3d,
+}
+
+export enum ResponseCode {
+  OK = 0x00,
+  ERR = 0x01,
+  CONTACTS_START = 0x02,
+  CONTACT = 0x03,
+  END_OF_CONTACTS = 0x04,
+  SELF_INFO = 0x05,
+  MSG_SENT = 0x06,
+  CONTACT_MSG_RECV = 0x07,
+  CHANNEL_MSG_RECV = 0x08,
+  CURR_TIME = 0x09,
+  NO_MORE_MESSAGES = 0x0a,
+  BATT_AND_STORAGE = 0x0c,
+  DEVICE_INFO = 0x0d,
+  CONTACT_MSG_RECV_V3 = 0x10,
+  CHANNEL_MSG_RECV_V3 = 0x11,
+  CHANNEL_INFO = 0x12,
+  TUNING_PARAMS = 0x17,
+  STATS = 0x18,
+}
+
+export enum PushCode {
+  ADVERT = 0x80,
+  PATH_UPDATED = 0x81,
+  SEND_CONFIRMED = 0x82,
+  MSG_WAITING = 0x83,
+  RAW_DATA = 0x84,
+  LOGIN_SUCCESS = 0x85,
+  LOGIN_FAIL = 0x86,
+  STATUS_RESPONSE = 0x87,
+  LOG_RX_DATA = 0x88,
+  TRACE_DATA = 0x89,
+  NEW_ADVERT = 0x8a,
+  TELEMETRY_RESPONSE = 0x8b,
+  BINARY_RESPONSE = 0x8c,
+  PATH_DISCOVERY_RESPONSE = 0x8d,
+  CONTROL_DATA = 0x8e,
+  CONTACT_DELETED = 0x8f,
+  CONTACTS_FULL = 0x90,
+}
+
+export enum ErrorCode {
+  UNSUPPORTED = 0x01,
+  NOT_FOUND = 0x02,
+  TABLE_FULL = 0x03,
+  BAD_STATE = 0x04,
+  FILE_IO = 0x05,
+  ILLEGAL_ARG = 0x06,
+}
+
+export enum ContactType {
+  UNKNOWN = 0x00,
+  ROOM = 0x01,
+  REPEATER = 0x02,
+  CLIENT = 0x03,
+  SENSOR = 0x04,
+}
+
+export const contactTypeName: Record<number, string> = {
+  [ContactType.UNKNOWN]: "unknown",
+  [ContactType.ROOM]: "room",
+  [ContactType.REPEATER]: "repeater",
+  [ContactType.CLIENT]: "client",
+  [ContactType.SENSOR]: "sensor",
+};

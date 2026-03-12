@@ -1,0 +1,531 @@
+// MeshCore protocol client - command/response layer over transport
+
+import { EventEmitter } from "events";
+import { TCPTransport, type ConnectionStatus } from "../transport/tcp";
+import { BufferWriter, BufferReader, pubKeyShort, toHex } from "./buffer";
+import {
+  CommandCode,
+  ResponseCode,
+  PushCode,
+  ContactType,
+  contactTypeName,
+  MAX_MSG_LENGTH,
+  type ErrorCode,
+} from "./constants";
+
+export interface Contact {
+  publicKey: Uint8Array;
+  publicKeyHex: string;
+  type: ContactType;
+  typeName: string;
+  flags: number;
+  pathLen: number;
+  path: Uint8Array;
+  name: string;
+  lastAdvert: number;
+  lat: number;
+  lon: number;
+  lastMod: number;
+}
+
+export interface SelfInfo {
+  type: number;
+  txPower: number;
+  maxTxPower: number;
+  publicKey: Uint8Array;
+  lat: number;
+  lon: number;
+  manualAddContacts: number;
+  freq: number;
+  bw: number;
+  sf: number;
+  cr: number;
+  name: string;
+}
+
+export interface DeviceInfo {
+  firmwareVer: number;
+  buildDate: string;
+  model: string;
+}
+
+export interface ChannelInfo {
+  index: number;
+  name: string;
+  secret: Uint8Array;
+}
+
+export interface ReceivedMessage {
+  type: "contact" | "channel";
+  senderKey: Uint8Array;
+  senderName?: string;
+  channelIdx?: number;
+  text: string;
+  timestamp: number;
+  snr?: number;
+}
+
+export interface BatteryInfo {
+  percentage: number;
+  storageUsed?: number;
+  storageTotal?: number;
+}
+
+const RESPONSE_TIMEOUT = 5000;
+
+export class MeshCoreClient extends EventEmitter {
+  private transport: TCPTransport;
+  private pendingResolve: ((frame: Uint8Array) => void) | null = null;
+  private _contacts: Map<string, Contact> = new Map();
+  private _selfInfo: SelfInfo | null = null;
+  private _deviceInfo: DeviceInfo | null = null;
+
+  constructor(host: string, port?: number) {
+    super();
+    this.transport = new TCPTransport({ host, port });
+    this.transport.on("frame", (frame: Uint8Array) => this.handleFrame(frame));
+    this.transport.on("status", (s: ConnectionStatus) => this.emit("status", s));
+    this.transport.on("disconnected", () => this.emit("disconnected"));
+    this.transport.on("error", (e: Error) => this.emit("error", e));
+  }
+
+  get status(): ConnectionStatus {
+    return this.transport.status;
+  }
+  get contacts(): Map<string, Contact> {
+    return this._contacts;
+  }
+  get selfInfo(): SelfInfo | null {
+    return this._selfInfo;
+  }
+  get deviceInfo(): DeviceInfo | null {
+    return this._deviceInfo;
+  }
+
+  async connect(): Promise<void> {
+    await this.transport.connect();
+  }
+
+  disconnect(): void {
+    this.transport.disconnect();
+  }
+
+  private handleFrame(frame: Uint8Array): void {
+    if (frame.length === 0) return;
+    const code = frame[0];
+
+    // Push codes are unsolicited — emit events
+    if (code >= 0x80) {
+      this.handlePush(code, frame.slice(1));
+      return;
+    }
+
+    // Response to a pending command
+    if (this.pendingResolve) {
+      this.pendingResolve(frame);
+      this.pendingResolve = null;
+    }
+  }
+
+  private handlePush(code: number, data: Uint8Array): void {
+    switch (code) {
+      case PushCode.MSG_WAITING:
+        this.emit("messages_waiting");
+        break;
+      case PushCode.ADVERT:
+      case PushCode.NEW_ADVERT:
+        this.emit("advert", data);
+        break;
+      case PushCode.PATH_UPDATED:
+        this.emit("path_updated", data);
+        break;
+      case PushCode.SEND_CONFIRMED:
+        this.emit("send_confirmed", data);
+        break;
+      case PushCode.STATUS_RESPONSE:
+        this.emit("status_response", data);
+        break;
+      case PushCode.TELEMETRY_RESPONSE:
+        this.emit("telemetry_response", data);
+        break;
+      default:
+        this.emit("push", { code, data });
+    }
+  }
+
+  /** Send a command and wait for a single response frame */
+  private sendCommand(payload: Uint8Array): Promise<Uint8Array> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingResolve = null;
+        reject(new Error("Command timeout"));
+      }, RESPONSE_TIMEOUT);
+
+      this.pendingResolve = (frame) => {
+        clearTimeout(timeout);
+        resolve(frame);
+      };
+
+      this.transport.send(payload);
+    });
+  }
+
+  /**
+   * Send a command and collect all response frames until a terminator.
+   * Used for multi-frame responses like contact lists.
+   */
+  private sendCommandMulti(
+    payload: Uint8Array,
+    terminators: number[],
+  ): Promise<Uint8Array[]> {
+    return new Promise((resolve, reject) => {
+      const frames: Uint8Array[] = [];
+      const timeout = setTimeout(() => {
+        this.pendingResolve = null;
+        reject(new Error("Command timeout (multi)"));
+      }, 15000);
+
+      const handler = (frame: Uint8Array) => {
+        frames.push(frame);
+        if (frame.length > 0 && terminators.includes(frame[0])) {
+          clearTimeout(timeout);
+          this.pendingResolve = null;
+          resolve(frames);
+        } else {
+          // Keep waiting for more frames
+          this.pendingResolve = handler;
+        }
+      };
+
+      this.pendingResolve = handler;
+      this.transport.send(payload);
+    });
+  }
+
+  // ─── High-level commands ─────────────────────────────────────
+
+  async appStart(appName = "mccli"): Promise<SelfInfo> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.APP_START);
+    w.writeByte(0x01); // appVer
+    w.writeBytes(new Uint8Array(6)); // reserved
+    w.writeString(appName);
+    const resp = await this.sendCommand(w.toBytes());
+    if (resp[0] !== ResponseCode.SELF_INFO) {
+      throw new Error(`APP_START failed: code ${resp[0]}`);
+    }
+    const r = new BufferReader(resp.slice(1));
+    const info: SelfInfo = {
+      type: r.readByte(),
+      txPower: r.readByte(),
+      maxTxPower: r.readByte(),
+      publicKey: r.readBytes(32),
+      lat: r.readInt32LE() / 1e6,
+      lon: r.readInt32LE() / 1e6,
+      manualAddContacts: r.remaining >= 4 ? r.readByte() : 0,
+      freq: r.remaining >= 4 ? r.readUInt32LE() / 1000 : 0,
+      bw: r.remaining >= 4 ? r.readUInt32LE() / 1000 : 0,
+      sf: r.remaining >= 1 ? r.readByte() : 0,
+      cr: r.remaining >= 1 ? r.readByte() : 0,
+      name: r.remaining > 0 ? r.readRemainingString() : "",
+    };
+    this._selfInfo = info;
+    return info;
+  }
+
+  async deviceQuery(appTargetVer = 3): Promise<DeviceInfo> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.DEVICE_QUERY);
+    w.writeByte(appTargetVer);
+    const resp = await this.sendCommand(w.toBytes());
+    if (resp[0] !== ResponseCode.DEVICE_INFO) {
+      throw new Error(`DEVICE_QUERY failed: code ${resp[0]}`);
+    }
+    const r = new BufferReader(resp.slice(1));
+    const info: DeviceInfo = {
+      firmwareVer: r.readByte(),
+      buildDate: (r.readBytes(6), r.readFixedString(12)), // skip 6 reserved, read 12 char date
+      model: r.remaining > 0 ? r.readRemainingString() : "",
+    };
+    this._deviceInfo = info;
+    return info;
+  }
+
+  async setDeviceTime(timestamp?: number): Promise<void> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.SET_DEVICE_TIME);
+    w.writeUInt32LE(timestamp ?? Math.floor(Date.now() / 1000));
+    const resp = await this.sendCommand(w.toBytes());
+    if (resp[0] !== ResponseCode.OK) {
+      throw new Error(`SET_DEVICE_TIME failed: code ${resp[0]}`);
+    }
+  }
+
+  async getContacts(since = 0): Promise<Contact[]> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.GET_CONTACTS);
+    if (since > 0) w.writeUInt32LE(since);
+    const frames = await this.sendCommandMulti(w.toBytes(), [
+      ResponseCode.END_OF_CONTACTS,
+      ResponseCode.ERR,
+    ]);
+
+    const contacts: Contact[] = [];
+    for (const frame of frames) {
+      if (frame[0] === ResponseCode.CONTACT) {
+        const c = this.parseContact(frame.slice(1));
+        contacts.push(c);
+        this._contacts.set(toHex(c.publicKey), c);
+      }
+    }
+    return contacts;
+  }
+
+  private parseContact(data: Uint8Array): Contact {
+    const r = new BufferReader(data);
+    const publicKey = r.readBytes(32);
+    const type = r.readByte() as ContactType;
+    const flags = r.readByte();
+    const pathLenByte = r.readByte();
+    // Top 2 bits = hash size indicator, bottom 6 = path length
+    const pathLen = pathLenByte & 0x3f;
+    const maxPath = 64;
+    const path = r.readBytes(maxPath);
+    const name = r.readFixedString(32);
+    const lastAdvert = r.readUInt32LE();
+    const lat = r.remaining >= 4 ? r.readInt32LE() / 1e6 : 0;
+    const lon = r.remaining >= 4 ? r.readInt32LE() / 1e6 : 0;
+    const lastMod = r.remaining >= 4 ? r.readUInt32LE() : 0;
+
+    return {
+      publicKey,
+      publicKeyHex: toHex(publicKey),
+      type,
+      typeName: contactTypeName[type] ?? "unknown",
+      flags,
+      pathLen,
+      path: path.slice(0, pathLen),
+      name,
+      lastAdvert,
+      lat,
+      lon,
+      lastMod,
+    };
+  }
+
+  async sendTextMessage(pubKeyPrefix: Uint8Array, text: string): Promise<void> {
+    if (text.length > MAX_MSG_LENGTH) {
+      text = text.slice(0, MAX_MSG_LENGTH);
+    }
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.SEND_TXT_MSG);
+    w.writeByte(0x00); // txt_type: plain
+    w.writeByte(0x00); // attempt
+    w.writeUInt32LE(Math.floor(Date.now() / 1000));
+    w.writeBytes(pubKeyPrefix.slice(0, 6));
+    w.writeString(text);
+    const resp = await this.sendCommand(w.toBytes());
+    if (resp[0] === ResponseCode.ERR) {
+      throw new Error(`Send message failed: error ${resp[1]}`);
+    }
+  }
+
+  async sendChannelMessage(channelIdx: number, text: string): Promise<void> {
+    if (text.length > MAX_MSG_LENGTH) {
+      text = text.slice(0, MAX_MSG_LENGTH);
+    }
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.SEND_CHANNEL_TXT_MSG);
+    w.writeByte(0x00); // reserved
+    w.writeByte(channelIdx);
+    w.writeUInt32LE(Math.floor(Date.now() / 1000));
+    w.writeString(text);
+    const resp = await this.sendCommand(w.toBytes());
+    if (resp[0] === ResponseCode.ERR) {
+      throw new Error(`Send channel message failed: error ${resp[1]}`);
+    }
+  }
+
+  async syncNextMessage(): Promise<ReceivedMessage | null> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.SYNC_NEXT_MESSAGE);
+    const resp = await this.sendCommand(w.toBytes());
+
+    switch (resp[0]) {
+      case ResponseCode.NO_MORE_MESSAGES:
+        return null;
+
+      case ResponseCode.CONTACT_MSG_RECV:
+      case ResponseCode.CONTACT_MSG_RECV_V3: {
+        const r = new BufferReader(resp.slice(1));
+        const senderKey = r.readBytes(6); // prefix only
+        const timestamp = r.readUInt32LE();
+        let snr: number | undefined;
+        if (resp[0] === ResponseCode.CONTACT_MSG_RECV_V3 && r.remaining > 0) {
+          const snrByte = r.readByte();
+          snr = (snrByte > 127 ? snrByte - 256 : snrByte) / 4.0;
+        }
+        const text = r.readRemainingString();
+        return {
+          type: "contact",
+          senderKey,
+          text,
+          timestamp,
+          snr,
+        };
+      }
+
+      case ResponseCode.CHANNEL_MSG_RECV:
+      case ResponseCode.CHANNEL_MSG_RECV_V3: {
+        const r = new BufferReader(resp.slice(1));
+        const channelIdx = r.readByte();
+        const senderKey = r.readBytes(6);
+        const timestamp = r.readUInt32LE();
+        let snr: number | undefined;
+        if (resp[0] === ResponseCode.CHANNEL_MSG_RECV_V3 && r.remaining > 0) {
+          const snrByte = r.readByte();
+          snr = (snrByte > 127 ? snrByte - 256 : snrByte) / 4.0;
+        }
+        const text = r.readRemainingString();
+        return {
+          type: "channel",
+          channelIdx,
+          senderKey,
+          text,
+          timestamp,
+          snr,
+        };
+      }
+
+      default:
+        return null;
+    }
+  }
+
+  /** Drain all pending messages */
+  async syncAllMessages(): Promise<ReceivedMessage[]> {
+    const msgs: ReceivedMessage[] = [];
+    for (;;) {
+      const msg = await this.syncNextMessage();
+      if (!msg) break;
+      msgs.push(msg);
+    }
+    return msgs;
+  }
+
+  async getBattery(): Promise<BatteryInfo> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.GET_BATT_AND_STORAGE);
+    const resp = await this.sendCommand(w.toBytes());
+    if (resp[0] !== ResponseCode.BATT_AND_STORAGE) {
+      throw new Error(`GET_BATT failed: code ${resp[0]}`);
+    }
+    const r = new BufferReader(resp.slice(1));
+    const percentage = r.readUInt16LE();
+    return { percentage };
+  }
+
+  async getChannel(idx: number): Promise<ChannelInfo> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.GET_CHANNEL);
+    w.writeByte(idx);
+    const resp = await this.sendCommand(w.toBytes());
+    if (resp[0] !== ResponseCode.CHANNEL_INFO) {
+      throw new Error(`GET_CHANNEL failed: code ${resp[0]}`);
+    }
+    const r = new BufferReader(resp.slice(1));
+    const name = r.readFixedString(32);
+    const secret = r.readBytes(32);
+    return { index: idx, name, secret };
+  }
+
+  async setChannel(idx: number, name: string, secret: Uint8Array): Promise<void> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.SET_CHANNEL);
+    w.writeByte(idx);
+    w.writeFixedString(name, 32);
+    w.writeBytes(secret);
+    const resp = await this.sendCommand(w.toBytes());
+    if (resp[0] !== ResponseCode.OK) {
+      throw new Error(`SET_CHANNEL failed: code ${resp[0]}`);
+    }
+  }
+
+  async sendAdvert(): Promise<void> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.SEND_SELF_ADVERT);
+    const resp = await this.sendCommand(w.toBytes());
+    if (resp[0] !== ResponseCode.OK) {
+      throw new Error(`SEND_ADVERT failed: code ${resp[0]}`);
+    }
+  }
+
+  async setAdvertName(name: string): Promise<void> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.SET_ADVERT_NAME);
+    w.writeFixedString(name, 32);
+    const resp = await this.sendCommand(w.toBytes());
+    if (resp[0] !== ResponseCode.OK) {
+      throw new Error(`SET_ADVERT_NAME failed: code ${resp[0]}`);
+    }
+  }
+
+  async removeContact(pubKeyPrefix: Uint8Array): Promise<void> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.REMOVE_CONTACT);
+    w.writeBytes(pubKeyPrefix.slice(0, 6));
+    const resp = await this.sendCommand(w.toBytes());
+    if (resp[0] !== ResponseCode.OK) {
+      throw new Error(`REMOVE_CONTACT failed: code ${resp[0]}`);
+    }
+  }
+
+  async resetPath(pubKeyPrefix: Uint8Array): Promise<void> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.RESET_PATH);
+    w.writeBytes(pubKeyPrefix.slice(0, 6));
+    const resp = await this.sendCommand(w.toBytes());
+    if (resp[0] !== ResponseCode.OK) {
+      throw new Error(`RESET_PATH failed: code ${resp[0]}`);
+    }
+  }
+
+  async reboot(): Promise<void> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.REBOOT);
+    this.transport.send(w.toBytes());
+    // No response expected — device reboots
+  }
+
+  async getDeviceTime(): Promise<number> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.GET_DEVICE_TIME);
+    const resp = await this.sendCommand(w.toBytes());
+    if (resp[0] !== ResponseCode.CURR_TIME) {
+      throw new Error(`GET_DEVICE_TIME failed: code ${resp[0]}`);
+    }
+    const r = new BufferReader(resp.slice(1));
+    return r.readUInt32LE();
+  }
+
+  /** Find a contact by name (case-insensitive partial match) */
+  findContact(query: string): Contact | undefined {
+    const q = query.toLowerCase();
+    for (const c of this._contacts.values()) {
+      if (c.name.toLowerCase() === q) return c;
+    }
+    for (const c of this._contacts.values()) {
+      if (c.name.toLowerCase().includes(q)) return c;
+    }
+    return undefined;
+  }
+
+  /** Resolve sender key prefix to contact name */
+  resolveContactName(keyPrefix: Uint8Array): string {
+    const prefixHex = toHex(keyPrefix);
+    for (const c of this._contacts.values()) {
+      if (c.publicKeyHex.startsWith(prefixHex)) return c.name;
+    }
+    return prefixHex.slice(0, 8);
+  }
+}
