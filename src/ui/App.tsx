@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Box, Text, useInput, useApp, useStdout, useFocus } from "ink";
+import { Box, Text, useInput, useApp, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import type {
   MeshCoreClient,
@@ -52,11 +52,13 @@ export default function App({ client }: AppProps) {
   const [scrollOffset, setScrollOffset] = useState(0);
   const [selectedContact, setSelectedContact] = useState(0);
   const [selectedConfig, setSelectedConfig] = useState(0);
-  const [inputFocused, setInputFocused] = useState(true);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pendingMsgsRef = useRef<ReceivedMessage[]>([]);
   const batchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seenMsgHashes = useRef<Set<string>>(new Set());
+
+  // In chat mode, input is always focused. In other modes, it's not.
+  const inputActive = mode === "chat";
 
   // Initialize
   useEffect(() => {
@@ -120,11 +122,9 @@ export default function App({ client }: AppProps) {
       setMessages((prev) => {
         const next = [...prev];
         for (const m of batch) {
-          // Dedup by hash
           const hash = `${m.timestamp}-${m.type}-${m.text.slice(0, 30)}`;
           if (seenMsgHashes.current.has(hash)) continue;
           seenMsgHashes.current.add(hash);
-          // Keep set from growing unbounded
           if (seenMsgHashes.current.size > 2000) {
             const arr = [...seenMsgHashes.current];
             seenMsgHashes.current = new Set(arr.slice(-1000));
@@ -177,20 +177,16 @@ export default function App({ client }: AppProps) {
           case "contacts":
           case "c":
             setMode("contacts");
-            setInputFocused(false);
             return;
           case "chat":
             setMode("chat");
-            setInputFocused(true);
             return;
           case "info":
           case "i":
             setMode("info");
-            setInputFocused(false);
             return;
           case "config":
             setMode("config");
-            setInputFocused(false);
             return;
           case "to": {
             const target = parts.slice(1).join(" ");
@@ -251,7 +247,6 @@ export default function App({ client }: AppProps) {
           case "h":
           case "?":
             setMode("help");
-            setInputFocused(false);
             return;
           default:
             setError(`Unknown command: ${cmd}`);
@@ -300,62 +295,44 @@ export default function App({ client }: AppProps) {
   );
 
   useInput((ch, key) => {
-    // Clear error on any keypress
     if (error) setError(null);
 
-    // When input is focused, only handle Escape and Tab for mode switching
-    if (inputFocused) {
-      if (key.escape) {
-        setInputFocused(false);
-        return;
-      }
+    // ── CHAT MODE: input is always active, only Tab/Esc switch away ──
+    if (mode === "chat") {
       if (key.tab) {
-        setMode((v) =>
-          v === "chat" ? "contacts" : v === "contacts" ? "info" : v === "info" ? "config" : "chat",
-        );
-        setInputFocused(false);
+        setMode("contacts");
         return;
       }
-      // All other keys go to TextInput
+      // All other keys go to TextInput — don't intercept
       return;
     }
 
-    // Mode switching via number keys (only when not typing)
-    if (ch === "1") { setMode("chat"); setInputFocused(true); return; }
-    if (ch === "2") { setMode("contacts"); return; }
-    if (ch === "3") { setMode("info"); return; }
-    if (ch === "4") { setMode("config"); return; }
-    if (ch === "?") { setMode(mode === "help" ? "chat" : "help"); return; }
-    if (key.tab) {
-      setMode((v) =>
-        v === "chat" ? "contacts" : v === "contacts" ? "info" : v === "info" ? "config" : "chat",
-      );
+    // ── NON-CHAT MODES: keyboard shortcuts work freely ──
+
+    // Enter goes back to chat to type
+    if (key.return) {
+      setMode("chat");
       return;
     }
     if (key.escape) {
       setMode("chat");
-      setInputFocused(true);
       return;
     }
 
-    // "i" to start typing (like vim insert mode)
-    if (ch === "i" || key.return) {
-      setInputFocused(true);
+    // Tab cycles views (skipping chat — use Enter/Esc for that)
+    if (key.tab) {
+      setMode((v) =>
+        v === "contacts" ? "info" : v === "info" ? "config" : v === "config" ? "help" : "contacts",
+      );
       return;
     }
 
-    // Scrolling in chat mode
-    if (mode === "chat") {
-      if (ch === "k" || key.upArrow) {
-        setScrollOffset((s) => Math.min(s + 1, Math.max(0, messages.length - 5)));
-      } else if (ch === "j" || key.downArrow) {
-        setScrollOffset((s) => Math.max(0, s - 1));
-      } else if (ch === "g") {
-        setScrollOffset(Math.max(0, messages.length - 5));
-      } else if (ch === "G") {
-        setScrollOffset(0);
-      }
-    }
+    // Number keys switch modes
+    if (ch === "1") { setMode("chat"); return; }
+    if (ch === "2") { setMode("contacts"); return; }
+    if (ch === "3") { setMode("info"); return; }
+    if (ch === "4") { setMode("config"); return; }
+    if (ch === "?") { setMode(mode === "help" ? "chat" : "help"); return; }
 
     // Contact navigation
     if (mode === "contacts") {
@@ -371,7 +348,6 @@ export default function App({ client }: AppProps) {
         setChatTarget(contacts[selectedContact].name);
         addSystemMessage(`Target set to DM: ${contacts[selectedContact].name}`);
         setMode("chat");
-        setInputFocused(true);
       }
     }
 
@@ -461,6 +437,7 @@ export default function App({ client }: AppProps) {
             messages={messages}
             height={rows - 5}
             scrollOffset={scrollOffset}
+            targetLabel={targetLabel}
           />
         )}
         {mode === "contacts" && (
@@ -494,20 +471,20 @@ export default function App({ client }: AppProps) {
       {/* ═══ INPUT BAR ═══ */}
       <Box
         borderStyle="single"
-        borderColor={inputFocused ? theme.border.focused : theme.border.normal}
+        borderColor={inputActive ? theme.border.focused : theme.border.normal}
         paddingX={1}
       >
         <Text color={theme.fg.accent} bold>
           [{targetLabel}]
         </Text>
-        <Text color={inputFocused ? theme.fg.accent : theme.fg.muted}>
+        <Text color={inputActive ? theme.fg.accent : theme.fg.muted}>
           {" ❯ "}
         </Text>
-        {inputFocused ? (
+        {inputActive ? (
           <TextInput value={input} onChange={setInput} onSubmit={handleSubmit} />
         ) : (
           <Text color={theme.fg.muted}>
-            {input || "Press i or Enter to type, ? for help"}
+            Press Enter to chat, 1-4 to switch views
           </Text>
         )}
       </Box>
@@ -531,50 +508,58 @@ function ChatView({
   messages,
   height,
   scrollOffset,
+  targetLabel,
 }: {
   messages: ChatMessage[];
   height: number;
   scrollOffset: number;
+  targetLabel: string;
 }) {
-  const visibleCount = Math.max(1, height - 1);
+  const visibleCount = Math.max(1, height - 2);
   const endIdx = messages.length - scrollOffset;
   const startIdx = Math.max(0, endIdx - visibleCount);
   const visible = messages.slice(startIdx, Math.max(0, endIdx));
 
   return (
     <Box flexDirection="column" paddingX={1}>
+      {/* Chat header showing target */}
+      <Box>
+        <Text color={theme.fg.accent} bold>
+          {"═══ MESSAGES"}
+        </Text>
+        <Text color={theme.fg.muted}> → </Text>
+        <Text color={theme.message.channel} bold>
+          {targetLabel}
+        </Text>
+        {messages.length > 0 && (
+          <Text color={theme.fg.muted}>
+            {" "}({messages.length} total)
+          </Text>
+        )}
+        <Text color={theme.fg.muted}>
+          {" ═══ Tab=switch views"}
+        </Text>
+      </Box>
+
       {visible.length === 0 && (
         <Box flexDirection="column" paddingY={1}>
           <Text color={theme.fg.muted}>
-            {"  ╔══════════════════════════════════════════╗"}
+            {"  No messages yet. Start typing to send a message."}
           </Text>
           <Text color={theme.fg.muted}>
-            {"  ║   No messages yet.                       ║"}
-          </Text>
-          <Text color={theme.fg.muted}>
-            {"  ║   Type a message or ? for help            ║"}
-          </Text>
-          <Text color={theme.fg.muted}>
-            {"  ╚══════════════════════════════════════════╝"}
+            {"  Use /to <name> to DM, /to public for broadcast, /help for all commands."}
           </Text>
         </Box>
       )}
       {scrollOffset > 0 && (
         <Text color={theme.fg.secondary}>
-          {"  ▲ " + scrollOffset + " more above (k/↑ to scroll)"}
+          {"  ▲ " + scrollOffset + " more above"}
         </Text>
       )}
       {visible.map((m) => {
-        const time = new Date(m.timestamp * 1000).toLocaleTimeString("en-US", {
-          hour12: false,
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        });
-        const chLabel =
-          m.channelIdx !== undefined ? `[CH${m.channelIdx}]` : "";
-        const snrLabel =
-          m.snr !== undefined ? ` ${m.snr.toFixed(1)}dB` : "";
+        const time = formatTime(m.timestamp);
+        const chTag = m.channelIdx !== undefined ? `CH${m.channelIdx}` : "DM";
+        const snrStr = m.snr !== undefined ? `${m.snr.toFixed(1)}dB` : "";
 
         const senderColor = m.isSelf
           ? theme.message.self
@@ -582,21 +567,20 @@ function ChatView({
             ? theme.message.system
             : theme.message.other;
 
+        // Fixed-width columns: TIME(10) CHAN(5) SENDER(14) MSG(rest) SNR(opt)
         return (
           <Box key={m.id}>
-            <Text color={theme.fg.muted}>[{time}] </Text>
-            {chLabel && (
-              <Text color={theme.message.channel}>{chLabel} </Text>
-            )}
-            <Text color={senderColor} bold={!m.isSelf}>
-              {m.sender.slice(0, 12).padEnd(12)}
+            <Text color={theme.fg.muted}>{time} </Text>
+            <Text color={m.channelIdx !== undefined ? theme.message.channel : theme.fg.muted}>
+              {chTag.padEnd(5)}
             </Text>
-            <Text color={theme.fg.primary}> {m.text}</Text>
-            {snrLabel && (
-              <Text
-                color={m.snr !== undefined ? snrColor(m.snr) : theme.fg.muted}
-              >
-                {snrLabel}
+            <Text color={senderColor} bold={!m.isSelf}>
+              {m.sender.slice(0, 12).padEnd(13)}
+            </Text>
+            <Text color={theme.fg.primary}>{m.text}</Text>
+            {snrStr && (
+              <Text color={m.snr !== undefined ? snrColor(m.snr) : theme.fg.muted}>
+                {" " + snrStr}
               </Text>
             )}
           </Box>
@@ -707,7 +691,7 @@ function ContactsView({
       })}
       <Box marginTop={1}>
         <Text color={theme.fg.muted}>
-          j/k=navigate g/G=top/bottom d=DM Enter/i=type
+          j/k=navigate  g/G=top/bottom  d=DM  Enter=back to chat
         </Text>
       </Box>
     </Box>
@@ -888,7 +872,7 @@ function ConfigView({
 
       <Box marginBottom={1}>
         <Text color={theme.fg.secondary}>
-          Use slash commands to modify settings. j/k to browse.
+          Use slash commands to modify settings. j/k to browse. Enter to chat.
         </Text>
       </Box>
 
@@ -990,31 +974,30 @@ function HelpView() {
 
       <Box marginTop={1} flexDirection="column">
         <Text color={theme.message.channel} bold>
-          Global Shortcuts
+          Navigation
         </Text>
-        <Text color={theme.border.normal}>{"─".repeat(40)}</Text>
-        <HelpRow keys="1 / 2 / 3 / 4" desc="Chat / Nodes / Info / Config" />
+        <Text color={theme.border.normal}>{"─".repeat(42)}</Text>
         <HelpRow keys="Tab" desc="Cycle through views" />
+        <HelpRow keys="Enter / Esc" desc="Return to chat (from any view)" />
+        <HelpRow keys="1 / 2 / 3 / 4" desc="Jump to Chat/Nodes/Info/Config" />
         <HelpRow keys="?" desc="Toggle this help screen" />
-        <HelpRow keys="Esc" desc="Return to chat / unfocus input" />
-        <HelpRow keys="i / Enter" desc="Focus text input" />
         <HelpRow keys="Ctrl+C" desc="Quit" />
       </Box>
 
       <Box marginTop={1} flexDirection="column">
         <Text color={theme.message.channel} bold>
-          Chat Mode
+          Chat (input always active)
         </Text>
-        <Text color={theme.border.normal}>{"─".repeat(40)}</Text>
-        <HelpRow keys="j / k / ↑ / ↓" desc="Scroll message history" />
-        <HelpRow keys="g / G" desc="Scroll to top / bottom" />
+        <Text color={theme.border.normal}>{"─".repeat(42)}</Text>
+        <HelpRow keys="Type + Enter" desc="Send message to current target" />
+        <HelpRow keys="Tab" desc="Switch to nodes view" />
       </Box>
 
       <Box marginTop={1} flexDirection="column">
         <Text color={theme.message.channel} bold>
-          Nodes Mode
+          Nodes
         </Text>
-        <Text color={theme.border.normal}>{"─".repeat(40)}</Text>
+        <Text color={theme.border.normal}>{"─".repeat(42)}</Text>
         <HelpRow keys="j / k / ↑ / ↓" desc="Navigate contact list" />
         <HelpRow keys="g / G" desc="Jump to top / bottom" />
         <HelpRow keys="d" desc="DM selected contact" />
@@ -1022,12 +1005,11 @@ function HelpView() {
 
       <Box marginTop={1} flexDirection="column">
         <Text color={theme.message.channel} bold>
-          Slash Commands
+          Slash Commands (type in chat)
         </Text>
-        <Text color={theme.border.normal}>{"─".repeat(40)}</Text>
+        <Text color={theme.border.normal}>{"─".repeat(42)}</Text>
         <HelpRow keys="/to <target>" desc="Set target (name, public, ch#)" />
-        <HelpRow keys="/contacts" desc="Show contacts list" />
-        <HelpRow keys="/info" desc="Show device info" />
+        <HelpRow keys="/contacts /info" desc="Switch views" />
         <HelpRow keys="/config" desc="Show configuration" />
         <HelpRow keys="/advert" desc="Send advertisement beacon" />
         <HelpRow keys="/name <n>" desc="Set device advertised name" />
@@ -1038,7 +1020,7 @@ function HelpView() {
       </Box>
 
       <Box marginTop={1}>
-        <Text color={theme.fg.muted}>Press ? or Esc to close help</Text>
+        <Text color={theme.fg.muted}>Press ? or Enter or Esc to close</Text>
       </Box>
     </Box>
   );
@@ -1054,6 +1036,14 @@ function HelpRow({ keys, desc }: { keys: string; desc: string }) {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────
+
+function formatTime(ts: number): string {
+  const d = new Date(ts * 1000);
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  const s = String(d.getSeconds()).padStart(2, "0");
+  return `${h}:${m}:${s}`;
+}
 
 function timeSince(unixTimestamp: number): string {
   const now = Math.floor(Date.now() / 1000);
