@@ -584,14 +584,14 @@ export default function App({ client, deviceKey }: AppProps) {
         <NavTab num="4" label="CONF" active={mode === "config"} />
         <Text> </Text>
         <Text color={theme.fg.muted}>
-          <Text color={theme.fg.secondary}>?</Text>help
+          <Text color={theme.fg.secondary}>?</Text>
         </Text>
       </Box>
 
       {/* ═══ CONFIRMATION DIALOG ═══ */}
       {confirmAction && (
         <Box paddingX={1}>
-          <Text color={theme.status.warning} bold>▶ {confirmAction.label}</Text>
+          <Text color={theme.status.warning} bold>⚠ {confirmAction.label}</Text>
           <Text color={theme.fg.muted}> (y/n)</Text>
         </Box>
       )}
@@ -599,7 +599,7 @@ export default function App({ client, deviceKey }: AppProps) {
       {/* ═══ ERROR BANNER ═══ */}
       {error && (
         <Box paddingX={1}>
-          <Text color={theme.status.offline} bold>▶ {error}</Text>
+          <Text color={theme.status.offline} bold>✗ {error}</Text>
         </Box>
       )}
 
@@ -794,7 +794,7 @@ function ChatView({
             : [];
           if (visibleChannels.length === 0) {
             const isActive = !isDM && chatChannel === 0;
-            return <Text color={isActive ? theme.fg.accent : theme.fg.primary} bold={isActive}>{isActive ? "▶ " : "  "}public</Text>;
+            return <Text color={isActive ? theme.fg.accent : theme.fg.primary} bold={isActive}>{isActive ? "● " : "  "}public</Text>;
           }
           return visibleChannels.map((ch) => {
             const isActive = !isDM && chatChannel === ch.index;
@@ -802,7 +802,7 @@ function ChatView({
             return (
               <Box key={ch.index}>
                 <Text color={isActive ? theme.fg.accent : theme.fg.primary} bold={isActive}>
-                  {isActive ? "▶ " : "  "}{label.slice(0, sidebarWidth - 3)}
+                  {isActive ? "● " : "  "}{label.slice(0, sidebarWidth - 3)}
                 </Text>
               </Box>
             );
@@ -815,7 +815,7 @@ function ChatView({
         )}
         {isDM && (
           <Box>
-            <Text color={theme.fg.accent} bold>▶ {chatTarget.slice(0, sidebarWidth - 3)}</Text>
+            <Text color={theme.fg.accent} bold>● {chatTarget.slice(0, sidebarWidth - 3)}</Text>
           </Box>
         )}
       </Box>
