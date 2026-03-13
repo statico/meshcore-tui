@@ -573,41 +573,33 @@ export default function App({ client, deviceKey }: AppProps) {
         borderColor={theme.border.focused}
         paddingX={1}
       >
-        <Text bold color={theme.fg.accent}>▓▓ MESHCORE</Text>
+        <Text bold color={theme.fg.accent}>{cols >= 70 ? "▓▓ MESHCORE" : "▓▓"}</Text>
         <Text color={theme.fg.muted}> │ </Text>
         <Text color={status === "connected" ? theme.status.online : theme.status.offline}>
-          {status === "connected" ? "● ONLINE" : "○ OFFLINE"}
+          {status === "connected" ? "●" : "○"}
         </Text>
-        {selfInfo && (
+        {selfInfo && cols >= 50 && (
           <>
             <Text color={theme.fg.muted}> │ </Text>
             <Text color={theme.fg.primary}>{selfInfo.name}</Text>
           </>
         )}
-        {battery !== null && (
+        {battery !== null && cols >= 60 && (
           <>
             <Text color={theme.fg.muted}> │ </Text>
             <Text color={batteryColor(battery)}>⚡{battery}%</Text>
           </>
         )}
-        {contacts.length > 0 && (
-          <>
-            <Text color={theme.fg.muted}> │ </Text>
-            <Text color={theme.fg.secondary}>{contacts.length} nodes</Text>
-          </>
-        )}
         <Box flexGrow={1} />
         <NavTab num="1" label="CHAT" active={mode === "chat"} />
         <Text> </Text>
-        <NavTab num="2" label="NODES" active={mode === "nodes"} />
+        <NavTab num="2" label="NODE" active={mode === "nodes"} />
         <Text> </Text>
         <NavTab num="3" label="INFO" active={mode === "info"} />
         <Text> </Text>
         <NavTab num="4" label="CONF" active={mode === "config"} />
         <Text> </Text>
-        <Text color={theme.fg.muted}>
-          <Text color={theme.fg.secondary}>?</Text>
-        </Text>
+        <Text color={theme.fg.secondary}>?</Text>
       </Box>
 
       {/* ═══ CONFIRMATION DIALOG (modal) ═══ */}
