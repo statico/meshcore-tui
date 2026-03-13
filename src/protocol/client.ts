@@ -617,7 +617,8 @@ export class MeshCoreClient extends EventEmitter {
     w.writeFixedString(name, 32);
     w.writeBytes(secret.slice(0, 16)); // firmware expects exactly 16 bytes
     const resp = await this.sendCommand(w.toBytes());
-    if (resp[0] !== ResponseCode.OK) {
+    // Firmware responds with CHANNEL_INFO (0x12) on success, not OK
+    if (resp[0] !== ResponseCode.OK && resp[0] !== ResponseCode.CHANNEL_INFO) {
       throw new Error(`SET_CHANNEL failed: code ${resp[0]}`);
     }
   }

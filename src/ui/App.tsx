@@ -360,6 +360,16 @@ export default function App({ client, deviceKey }: AppProps) {
             const idx = parseInt(target.replace(/^ch?/i, ""), 10);
             setChatTarget(`ch${idx}`); setChatChannel(idx);
             addSystemMessage(`Target set to: CH${idx}`);
+          } else if (target.startsWith("#")) {
+            // Find channel by name
+            const chName = target.slice(1).toLowerCase();
+            const ch = channels.find((c) => c.name?.toLowerCase() === chName);
+            if (ch) {
+              setChatTarget(`ch${ch.index}`); setChatChannel(ch.index);
+              addSystemMessage(`Target set to: #${ch.name} (CH${ch.index})`);
+            } else {
+              setError(`Channel not found: ${target}. Use config view to create channels.`);
+            }
           } else {
             const contact = client.findContact(target);
             if (contact) {
