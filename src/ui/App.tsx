@@ -830,9 +830,10 @@ function ChatView({
   const msgAreaWidth = wide ? Math.max(20, cols - sidebarWidth - 4) : Math.max(20, cols - 4);
   const headerLines = wide ? 0 : 1;
   const visibleCount = Math.max(1, height - headerLines - 1);
-  const endIdx = filtered.length - scrollOffset;
+  const clampedOffset = Math.min(scrollOffset, Math.max(0, filtered.length - 1));
+  const endIdx = Math.max(0, filtered.length - clampedOffset);
   const startIdx = Math.max(0, endIdx - visibleCount);
-  const visible = filtered.slice(startIdx, Math.max(0, endIdx));
+  const visible = filtered.slice(startIdx, endIdx);
 
   const isSystem = chatTarget === "system";
 
