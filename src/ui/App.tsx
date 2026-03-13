@@ -112,9 +112,13 @@ export default function App({ client, deviceKey }: AppProps) {
           const info = await client.deviceQuery();
           setDeviceInfo(info);
         } catch {}
-        await client.setDeviceTime();
-        const contactList = await client.getContacts();
-        setContacts(contactList);
+        try { await client.setDeviceTime(); } catch {}
+        try {
+          const contactList = await client.getContacts();
+          setContacts(contactList);
+        } catch (e: any) {
+          addSystemMessage(`Failed to load contacts: ${e.message}`);
+        }
         try {
           const batt = await client.getBattery();
           setBattery(batt.percentage);
@@ -123,9 +127,13 @@ export default function App({ client, deviceKey }: AppProps) {
         try {
           const chs = await client.getAllChannels();
           setChannels(chs);
+        } catch (e: any) {
+          addSystemMessage(`Failed to load channels: ${e.message}`);
+        }
+        try {
+          const msgs = await client.syncAllMessages();
+          batchAddMessages(msgs);
         } catch {}
-        const msgs = await client.syncAllMessages();
-        batchAddMessages(msgs);
       } catch (e: any) {
         setError(e.message);
       }
@@ -137,6 +145,12 @@ export default function App({ client, deviceKey }: AppProps) {
         if (msgs.length > 0) batchAddMessages(msgs);
       } catch {}
     }, 2000);
+
+    // Periodically refresh contacts and channels
+    const refreshRef = setInterval(async () => {
+      try { const cl = await client.getContacts(); setContacts(cl); } catch {}
+      try { const chs = await client.getAllChannels(); setChannels(chs); } catch {}
+    }, 30000);
 
     client.on("messages_waiting", async () => {
       try {
@@ -159,11 +173,34 @@ export default function App({ client, deviceKey }: AppProps) {
       });
     });
 
-    client.on("disconnected", () => setStatus("disconnected"));
+    client.on("disconnected", () => {
+      setStatus("disconnected");
+      addSystemMessage("Connection lost. Reconnecting...");
+      // Auto-reconnect with backoff
+      const tryReconnect = async (attempt = 0) => {
+        const delay = Math.min(2000 * Math.pow(2, attempt), 30000);
+        await new Promise((r) => setTimeout(r, delay));
+        try {
+          await client.connect();
+          await client.appStart("mccli");
+          setStatus("connected");
+          addSystemMessage("Reconnected!");
+          // Refresh state
+          try { const cl = await client.getContacts(); setContacts(cl); } catch {}
+          try { const chs = await client.getAllChannels(); setChannels(chs); } catch {}
+          try { const msgs = await client.syncAllMessages(); if (msgs.length > 0) batchAddMessages(msgs); } catch {}
+        } catch {
+          addSystemMessage(`Reconnect attempt ${attempt + 1} failed, retrying...`);
+          tryReconnect(attempt + 1);
+        }
+      };
+      tryReconnect();
+    });
 
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
       if (batchTimerRef.current) clearTimeout(batchTimerRef.current);
+      clearInterval(refreshRef);
     };
   }, []);
 
