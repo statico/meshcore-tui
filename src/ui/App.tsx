@@ -458,15 +458,15 @@ export default function App({ client, deviceKey }: AppProps) {
         setScrollOffset(0);
         return;
       }
-      // Tab/Shift-Tab cycle through channels
-      if (key.tab && key.shift) {
+      // Tab/Shift-Tab or ,/. cycle through channels
+      if ((key.tab && key.shift) || ch === ",") {
         const maxCh = channels.length > 0 ? channels.length - 1 : 0;
         const prev = chatChannel > 0 ? chatChannel - 1 : maxCh;
         setChatChannel(prev);
         setChatTarget(prev === 0 ? "public" : `ch${prev}`);
         return;
       }
-      if (key.tab) {
+      if (key.tab || ch === ".") {
         const maxCh = channels.length > 0 ? channels.length - 1 : 0;
         const next = chatChannel < maxCh ? chatChannel + 1 : 0;
         setChatChannel(next);
@@ -733,7 +733,7 @@ export default function App({ client, deviceKey }: AppProps) {
             <Text color={theme.fg.muted}>[{targetLabel}] </Text>
             <KeyHint k="Enter" desc="=type" />
             <Text color={theme.fg.muted}>│ </Text>
-            <KeyHint k="Tab" desc="=next ch" />
+            <KeyHint k="./," desc="=ch ↔" />
             <Text color={theme.fg.muted}>│ </Text>
             <KeyHint k="]/[" desc="=views" />
             <Text color={theme.fg.muted}>│ </Text>
@@ -1277,7 +1277,7 @@ function HelpModal({ mode, cols, rows }: { mode: Mode; cols: number; rows: numbe
         <Box flexDirection="column">
           <HelpRow keys="Enter" desc="Focus input to type" />
           <HelpRow keys="Esc" desc="Unfocus input" />
-          <HelpRow keys="Tab / Shift-Tab" desc="Next / previous channel" />
+          <HelpRow keys="Tab/. / Shift-Tab/," desc="Next / previous channel" />
           <HelpRow keys="/to <target>" desc="Set DM target (name, public, ch#)" />
           <HelpRow keys="/quit" desc="Exit" />
         </Box>

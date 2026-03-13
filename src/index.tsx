@@ -24,7 +24,7 @@ function usage(): never {
   Keybindings:
     1 / 2 / 3 / 4       Chat / Nodes / Info / Config
     ] / [                Next / previous view
-    Tab / Shift-Tab      Next / previous channel (chat)
+    . / ,                Next / previous channel (chat)
     ?                    Context-aware help modal
     Enter                Focus chat input
     Esc                  Unfocus / return to chat
