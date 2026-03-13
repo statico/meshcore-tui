@@ -170,6 +170,9 @@ export class MeshCoreClient extends EventEmitter {
       case PushCode.PATH_DISCOVERY_RESPONSE:
         this.emit("path_discovery_response", data);
         break;
+      case PushCode.LOG_RX_DATA:
+        this.emit("log_rx_data", data);
+        break;
       case PushCode.CONTACT_DELETED:
         this.emit("contact_deleted", data);
         break;

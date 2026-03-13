@@ -133,7 +133,8 @@ export default function App({ client, deviceKey }: AppProps) {
           const chs = await client.getAllChannels();
           setChannels(chs);
           if (chs.length > 0) {
-            addSystemMessage(`Loaded ${chs.length} channels: ${chs.map((c) => `ch${c.index}=${JSON.stringify(c.name)}`).join(", ")}`);
+            const named = chs.filter((c) => c.name);
+            addSystemMessage(`Loaded ${chs.length} channels (${named.length} named): ${named.map((c) => `ch${c.index}="${c.name}"`).join(", ")}`);
           } else {
             // Try single channel fetch for debugging
             try {
@@ -268,6 +269,16 @@ export default function App({ client, deviceKey }: AppProps) {
           ? hops.map((h, i) => `  ${i + 1}. ${h}`)
           : ["  Direct path"],
       });
+    });
+
+    client.on("log_rx_data", (data: Uint8Array) => {
+      // Radio log — decode and show
+      try {
+        const text = new TextDecoder().decode(data).replace(/\0/g, "").trim();
+        if (text) addSystemMessage(`Radio RX: ${text}`);
+      } catch {
+        addSystemMessage(`Radio RX: (${data.length} bytes)`);
+      }
     });
 
     client.on("push", ({ code, data }: { code: number; data: Uint8Array }) => {
@@ -1539,7 +1550,10 @@ function HelpRow({ keys, desc }: { keys: string; desc: string }) {
 
 function formatTime(ts: number): string {
   const d = new Date(ts * 1000);
-  return d.toLocaleTimeString(undefined, { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  const s = String(d.getSeconds()).padStart(2, "0");
+  return `${h}:${m}:${s}`;
 }
 
 function timeSince(unixTimestamp: number): string {
