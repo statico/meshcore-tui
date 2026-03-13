@@ -607,7 +607,7 @@ export class MeshCoreClient extends EventEmitter {
     w.writeByte(idx);
     const resp = await this.sendCommand(w.toBytes());
     if (resp[0] !== ResponseCode.CHANNEL_INFO) {
-      throw new Error(`GET_CHANNEL failed: code ${resp[0]}`);
+      throw new Error(`GET_CHANNEL(${idx}) failed: code ${resp[0]} (0x${resp[0].toString(16)}) len=${resp.length} raw=${toHex(resp.slice(0, 8))}`);
     }
     const r = new BufferReader(resp.slice(1));
     const index = r.readByte(); // channel idx from response
