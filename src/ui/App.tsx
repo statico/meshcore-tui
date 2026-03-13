@@ -185,12 +185,21 @@ export default function App({ client, deviceKey }: AppProps) {
             const arr = [...seenMsgHashes.current];
             seenMsgHashes.current = new Set(arr.slice(-1000));
           }
-          const sender = client.resolveContactName(m.senderKey);
+          let sender = client.resolveContactName(m.senderKey);
+          let msgText = m.text;
+          // Channel messages embed sender in text as "Name: message"
+          if (sender === "broadcast" && m.type === "channel") {
+            const colonIdx = m.text.indexOf(": ");
+            if (colonIdx > 0 && colonIdx < 30) {
+              sender = m.text.slice(0, colonIdx);
+              msgText = m.text.slice(colonIdx + 2);
+            }
+          }
           const chatMsg: ChatMessage = {
             id: ++msgIdCounter,
             timestamp: m.timestamp,
             sender,
-            text: m.text,
+            text: msgText,
             isSelf: false,
             channelIdx: m.channelIdx,
             snr: m.snr,
@@ -600,11 +609,35 @@ export default function App({ client, deviceKey }: AppProps) {
         </Text>
       </Box>
 
-      {/* ═══ CONFIRMATION DIALOG ═══ */}
+      {/* ═══ CONFIRMATION DIALOG (modal) ═══ */}
       {confirmAction && (
-        <Box paddingX={1}>
-          <Text color={theme.status.warning} bold>⚠ {confirmAction.label}</Text>
-          <Text color={theme.fg.muted}> (y/n)</Text>
+        <Box
+          position="absolute"
+          flexDirection="column"
+          width={cols}
+          height={rows}
+          justifyContent="center"
+          alignItems="center"
+        >
+          <Box
+            flexDirection="column"
+            borderStyle="double"
+            borderColor={theme.status.warning}
+            paddingX={3}
+            paddingY={1}
+            width={Math.min(50, cols - 4)}
+          >
+            <Text color={theme.status.warning} bold>⚠ CONFIRM</Text>
+            <Text> </Text>
+            <Text color={theme.fg.primary}>{confirmAction.label}</Text>
+            <Text> </Text>
+            <Box>
+              <Text color={theme.fg.secondary} bold>y</Text>
+              <Text color={theme.fg.muted}> = yes   </Text>
+              <Text color={theme.fg.secondary} bold>n</Text>
+              <Text color={theme.fg.muted}> = cancel</Text>
+            </Box>
+          </Box>
         </Box>
       )}
 
