@@ -185,11 +185,30 @@ export default function App({ client, deviceKey }: AppProps) {
     });
 
     client.on("advert", (data: Uint8Array) => {
-      addSystemMessage(`Push: ADVERT received (${data.length} bytes)`);
+      // Try to extract advertiser name from the data
+      if (data.length >= 32) {
+        const key = toHex(data.slice(0, 32)).slice(0, 8);
+        const contact = [...(client as any)._contacts.values()].find(
+          (c: any) => toHex(c.publicKey).startsWith(key)
+        );
+        const name = contact ? contact.name : key + "...";
+        addSystemMessage(`Advert from ${name}`);
+      } else {
+        addSystemMessage(`Advert received (${data.length} bytes)`);
+      }
     });
 
     client.on("path_updated", (data: Uint8Array) => {
-      addSystemMessage(`Push: PATH_UPDATED (${data.length} bytes)`);
+      if (data.length >= 32) {
+        const key = toHex(data.slice(0, 32)).slice(0, 8);
+        const contact = [...(client as any)._contacts.values()].find(
+          (c: any) => toHex(c.publicKey).startsWith(key)
+        );
+        const name = contact ? contact.name : key + "...";
+        addSystemMessage(`Path updated for ${name}`);
+      } else {
+        addSystemMessage(`Path updated (${data.length} bytes)`);
+      }
     });
 
     client.on("send_confirmed", () => {
@@ -272,13 +291,14 @@ export default function App({ client, deviceKey }: AppProps) {
     });
 
     client.on("log_rx_data", (data: Uint8Array) => {
-      // Radio log — decode and show
-      try {
-        const text = new TextDecoder().decode(data).replace(/\0/g, "").trim();
-        if (text) addSystemMessage(`Radio RX: ${text}`);
-      } catch {
-        addSystemMessage(`Radio RX: (${data.length} bytes)`);
-      }
+      if (data.length < 3) return;
+      // Byte 0: SNR (signed, /4), Byte 1: RSSI (signed), Bytes 2+: payload
+      const snrRaw = data[0] < 128 ? data[0] : data[0] - 256;
+      const snr = (snrRaw / 4).toFixed(1);
+      const rssiRaw = data[1] < 128 ? data[1] : data[1] - 256;
+      const rssi = rssiRaw;
+      const payloadLen = data.length - 2;
+      addSystemMessage(`RX: SNR=${snr}dB RSSI=${rssi}dBm payload=${payloadLen}B`);
     });
 
     client.on("push", ({ code, data }: { code: number; data: Uint8Array }) => {
