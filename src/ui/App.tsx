@@ -55,7 +55,7 @@ export default function App({ client, deviceKey }: AppProps) {
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
   const [channels, setChannels] = useState<ChannelInfo[]>([]);
   const [input, setInput] = useState("");
-  const [status, setStatus] = useState("connected");
+  const [status, setStatus] = useState("loading");
   const [chatTarget, setChatTarget] = useState<string>("public");
   const [chatChannel, setChatChannel] = useState(0);
   const [battery, setBattery] = useState<number | null>(null);
@@ -150,6 +150,7 @@ export default function App({ client, deviceKey }: AppProps) {
           const msgs = await client.syncAllMessages();
           batchAddMessages(msgs);
         } catch {}
+        setStatus("connected");
         addSystemMessage("Ready.");
       } catch (e: any) {
         setError(e.message);
@@ -727,9 +728,10 @@ export default function App({ client, deviceKey }: AppProps) {
       >
         <Text bold color={theme.fg.accent}>{cols >= 70 ? "▓▓ MESHCORE" : "▓▓"}</Text>
         <Text color={theme.fg.muted}> │ </Text>
-        <Text color={status === "connected" ? theme.status.online : theme.status.offline}>
-          {status === "connected" ? "●" : "○"}
+        <Text color={status === "connected" ? theme.status.online : status === "loading" ? theme.status.warning : theme.status.offline}>
+          {status === "connected" ? "●" : status === "loading" ? "◌" : "○"}
         </Text>
+        {status === "loading" && <Text color={theme.status.warning}> loading...</Text>}
         {selfInfo && cols >= 50 && (
           <>
             <Text color={theme.fg.muted}> │ </Text>
