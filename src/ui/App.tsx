@@ -445,6 +445,7 @@ export default function App({ client, deviceKey }: AppProps) {
       if (ch === "s") {
         setChatTarget(chatTarget === "system" ? "public" : "system");
         if (chatTarget !== "system") setChatChannel(0);
+        setScrollOffset(0);
         return;
       }
       // Tab/Shift-Tab cycle through channels
@@ -830,17 +831,17 @@ function ChatView({
   const msgAreaWidth = wide ? Math.max(20, cols - sidebarWidth - 4) : Math.max(20, cols - 4);
   const headerLines = wide ? 0 : 1;
   const visibleCount = Math.max(1, height - headerLines - 1);
-  const clampedOffset = Math.min(scrollOffset, Math.max(0, filtered.length - 1));
-  const endIdx = Math.max(0, filtered.length - clampedOffset);
+  const safeOffset = filtered.length > 0 ? Math.min(scrollOffset, filtered.length - 1) : 0;
+  const endIdx = filtered.length - safeOffset;
   const startIdx = Math.max(0, endIdx - visibleCount);
-  const visible = filtered.slice(startIdx, endIdx);
+  const visible = endIdx > 0 ? filtered.slice(startIdx, endIdx) : [];
 
   const isSystem = chatTarget === "system";
 
   // Filter messages based on active target
-  const filtered = isSystem
+  const filtered = (isSystem
     ? messages.filter((m) => m.sender === "system")
-    : messages.filter((m) => m.sender !== "system");
+    : messages.filter((m) => m.sender !== "system")) || [];
 
   // Channel name for compact header
   const activeChannelName = isSystem
