@@ -821,6 +821,13 @@ function ChatView({
   chatTarget: string;
 }) {
   const isDM = chatTarget !== "public" && !chatTarget.startsWith("ch");
+  const isSystem = chatTarget === "system";
+
+  // Filter messages based on active target
+  const allMessages = messages || [];
+  const filtered = isSystem
+    ? allMessages.filter((m) => m.sender === "system")
+    : allMessages.filter((m) => m.sender !== "system");
 
   // Responsive breakpoints
   const wide = cols >= 80;
@@ -835,14 +842,6 @@ function ChatView({
   const endIdx = filtered.length - safeOffset;
   const startIdx = Math.max(0, endIdx - visibleCount);
   const visible = endIdx > 0 ? filtered.slice(startIdx, endIdx) : [];
-
-  const isSystem = chatTarget === "system";
-
-  // Filter messages based on active target
-  const allMessages = messages || [];
-  const filtered = isSystem
-    ? allMessages.filter((m) => m.sender === "system")
-    : allMessages.filter((m) => m.sender !== "system");
 
   // Channel name for compact header
   const activeChannelName = isSystem
