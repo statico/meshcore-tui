@@ -432,6 +432,12 @@ export default function App({ client, deviceKey }: AppProps) {
       }
       // Not focused — keyboard shortcuts work
       if (key.return) { setChatInputFocused(true); return; }
+      // s toggles system channel
+      if (ch === "s") {
+        setChatTarget(chatTarget === "system" ? "public" : "system");
+        if (chatTarget !== "system") setChatChannel(0);
+        return;
+      }
       // Tab/Shift-Tab cycle through channels
       if (key.tab && key.shift) {
         const maxCh = channels.length > 0 ? channels.length - 1 : 0;
@@ -791,14 +797,23 @@ function ChatView({
   const msgAreaWidth = wide ? Math.max(20, cols - sidebarWidth - 4) : Math.max(20, cols - 4);
   const headerLines = wide ? 0 : 1;
   const visibleCount = Math.max(1, height - headerLines - 1);
-  const endIdx = messages.length - scrollOffset;
+  const endIdx = filtered.length - scrollOffset;
   const startIdx = Math.max(0, endIdx - visibleCount);
-  const visible = messages.slice(startIdx, Math.max(0, endIdx));
+  const visible = filtered.slice(startIdx, Math.max(0, endIdx));
+
+  const isSystem = chatTarget === "system";
+
+  // Filter messages based on active target
+  const filtered = isSystem
+    ? messages.filter((m) => m.sender === "system")
+    : messages.filter((m) => m.sender !== "system");
 
   // Channel name for compact header
-  const activeChannelName = isDM
-    ? `DM:${chatTarget}`
-    : channels.find((c) => c.index === chatChannel)?.name || (chatChannel === 0 ? "public" : `ch${chatChannel}`);
+  const activeChannelName = isSystem
+    ? "system"
+    : isDM
+      ? `DM:${chatTarget}`
+      : channels.find((c) => c.index === chatChannel)?.name || (chatChannel === 0 ? "public" : `ch${chatChannel}`);
 
   // Get visible channels for sidebar
   const visibleChannels = channels.length > 0
@@ -838,6 +853,11 @@ function ChatView({
               </Box>
             </>
           )}
+          <Box marginTop={1}>
+            <Text color={isSystem ? theme.fg.accent : theme.fg.muted} bold={isSystem}>
+              {isSystem ? "● " : "  "}system
+            </Text>
+          </Box>
         </Box>
       )}
 
@@ -848,7 +868,7 @@ function ChatView({
       {!wide && (
         <Box>
           <Text color={theme.fg.accent} bold>● {activeChannelName}</Text>
-          <Text color={theme.fg.muted}> ({messages.length} msgs)</Text>
+          <Text color={theme.fg.muted}> ({filtered.length} msgs)</Text>
         </Box>
       )}
 
