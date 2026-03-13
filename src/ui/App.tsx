@@ -128,6 +128,7 @@ export default function App({ client, deviceKey }: AppProps) {
         try {
           const chs = await client.getAllChannels();
           setChannels(chs);
+          addSystemMessage(`Loaded ${chs.length} channels: ${chs.map((c) => `ch${c.index}=${JSON.stringify(c.name)}`).join(", ")}`);
         } catch (e: any) {
           addSystemMessage(`Failed to load channels: ${e.message}`);
         }
