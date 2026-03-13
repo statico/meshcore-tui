@@ -170,13 +170,28 @@ export default function App({ client, deviceKey }: AppProps) {
     }, 30000);
 
     client.on("messages_waiting", async () => {
+      addSystemMessage("Push: MSG_WAITING — syncing messages...");
       try {
         const msgs = await client.syncAllMessages();
-        if (msgs.length > 0) batchAddMessages(msgs);
-      } catch {}
+        if (msgs.length > 0) {
+          addSystemMessage(`Synced ${msgs.length} new message(s)`);
+          batchAddMessages(msgs);
+        }
+      } catch (e: any) {
+        addSystemMessage(`Sync failed: ${e.message}`);
+      }
+    });
+
+    client.on("advert", (data: Uint8Array) => {
+      addSystemMessage(`Push: ADVERT received (${data.length} bytes)`);
+    });
+
+    client.on("path_updated", (data: Uint8Array) => {
+      addSystemMessage(`Push: PATH_UPDATED (${data.length} bytes)`);
     });
 
     client.on("send_confirmed", () => {
+      addSystemMessage("Push: SEND_CONFIRMED — message delivered");
       // Mark the most recent pending self-message as confirmed
       setMessages((prev) => {
         const next = [...prev];
@@ -252,6 +267,18 @@ export default function App({ client, deviceKey }: AppProps) {
           ? hops.map((h, i) => `  ${i + 1}. ${h}`)
           : ["  Direct path"],
       });
+    });
+
+    client.on("push", ({ code, data }: { code: number; data: Uint8Array }) => {
+      addSystemMessage(`Push: unknown code 0x${code.toString(16)} (${data.length} bytes)`);
+    });
+
+    client.on("contact_deleted", () => {
+      addSystemMessage("Push: CONTACT_DELETED");
+    });
+
+    client.on("contacts_full", () => {
+      addSystemMessage("Push: CONTACTS_FULL — contact table full");
     });
 
     client.on("disconnected", () => {
