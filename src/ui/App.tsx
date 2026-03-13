@@ -839,9 +839,10 @@ function ChatView({
   const isSystem = chatTarget === "system";
 
   // Filter messages based on active target
-  const filtered = (isSystem
-    ? messages.filter((m) => m.sender === "system")
-    : messages.filter((m) => m.sender !== "system")) || [];
+  const allMessages = messages || [];
+  const filtered = isSystem
+    ? allMessages.filter((m) => m.sender === "system")
+    : allMessages.filter((m) => m.sender !== "system");
 
   // Channel name for compact header
   const activeChannelName = isSystem
@@ -930,10 +931,10 @@ function ChatView({
           const senderCol = m.sender.slice(0, senderMax).padEnd(senderPad);
 
           return (
-            <Box key={m.id} width={msgAreaWidth}>
+            <Box key={m.id}>
               <Text color={theme.fg.muted}>{timeCol}</Text>
               <Text color={senderColor} bold={!m.isSelf}>{senderCol}</Text>
-              <Text color={theme.fg.primary} wrap="wrap">{m.text}</Text>
+              <Text color={theme.fg.primary}>{m.text}</Text>
               {m.isSelf && m.status === "pending" && <Text color={theme.fg.muted}> [···]</Text>}
               {m.isSelf && m.status === "confirmed" && <Text color={theme.status.online}> [✓]</Text>}
             </Box>
@@ -943,9 +944,9 @@ function ChatView({
         // Narrow: minimal layout
         const senderShort = m.sender.slice(0, 6);
         return (
-          <Box key={m.id} width={cols - 4}>
+          <Box key={m.id}>
             <Text color={senderColor} bold={!m.isSelf}>{senderShort} </Text>
-            <Text color={theme.fg.primary} wrap="wrap">{m.text}</Text>
+            <Text color={theme.fg.primary}>{m.text}</Text>
             {m.isSelf && m.status === "pending" && <Text color={theme.fg.muted}> ···</Text>}
             {m.isSelf && m.status === "confirmed" && <Text color={theme.status.online}> ✓</Text>}
           </Box>
