@@ -696,6 +696,7 @@ export default function App({ client, deviceKey }: AppProps) {
             channels={channels}
             chatChannel={chatChannel}
             chatTarget={chatTarget}
+            contacts={contacts}
           />
         )}
         {mode === "nodes" && (
@@ -845,6 +846,7 @@ function ChatView({
   channels,
   chatChannel,
   chatTarget,
+  contacts,
 }: {
   messages: ChatMessage[];
   height: number;
@@ -854,6 +856,7 @@ function ChatView({
   channels: ChannelInfo[];
   chatChannel: number;
   chatTarget: string;
+  contacts: Contact[];
 }) {
   const isDM = chatTarget !== "public" && !chatTarget.startsWith("ch");
   const isSystem = chatTarget === "system";
@@ -915,14 +918,40 @@ function ChatView({
               );
             })
           )}
-          {isDM && (
+          {/* Rooms */}
+          {contacts.filter((c) => c.typeName === "room").length > 0 && (
             <>
               <Box marginTop={1}>
-                <Text color={theme.fg.secondary} bold>DM</Text>
+                <Text color={theme.fg.secondary} bold>ROOMS</Text>
               </Box>
-              <Box>
-                <Text color={theme.fg.accent} bold>● {chatTarget.slice(0, sidebarWidth - 3)}</Text>
+              {contacts.filter((c) => c.typeName === "room").map((c) => {
+                const isActive = isDM && chatTarget === c.name;
+                return (
+                  <Box key={c.publicKeyHex}>
+                    <Text color={isActive ? theme.fg.accent : theme.contact.room} bold={isActive}>
+                      {isActive ? "● " : "  "}{c.name.slice(0, sidebarWidth - 3)}
+                    </Text>
+                  </Box>
+                );
+              })}
+            </>
+          )}
+          {/* DMs — show contacts we've messaged or that are clients */}
+          {contacts.filter((c) => c.typeName === "client").length > 0 && (
+            <>
+              <Box marginTop={1}>
+                <Text color={theme.fg.secondary} bold>DMs</Text>
               </Box>
+              {contacts.filter((c) => c.typeName === "client").slice(0, 5).map((c) => {
+                const isActive = isDM && chatTarget === c.name;
+                return (
+                  <Box key={c.publicKeyHex}>
+                    <Text color={isActive ? theme.fg.accent : theme.contact.client} bold={isActive}>
+                      {isActive ? "● " : "  "}{c.name.slice(0, sidebarWidth - 3)}
+                    </Text>
+                  </Box>
+                );
+              })}
             </>
           )}
           <Box marginTop={1}>
