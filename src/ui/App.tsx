@@ -781,63 +781,84 @@ function ChatView({
   chatTarget: string;
 }) {
   const isDM = chatTarget !== "public" && !chatTarget.startsWith("ch");
+
+  // Responsive breakpoints
+  const wide = cols >= 80;
+  const medium = cols >= 50 && cols < 80;
+  // narrow = cols < 50
+
   const sidebarWidth = 14;
-  const msgAreaWidth = Math.max(20, cols - sidebarWidth - 4);
-  const visibleCount = Math.max(1, height - 1);
+  const msgAreaWidth = wide ? Math.max(20, cols - sidebarWidth - 4) : Math.max(20, cols - 4);
+  const headerLines = wide ? 0 : 1;
+  const visibleCount = Math.max(1, height - headerLines - 1);
   const endIdx = messages.length - scrollOffset;
   const startIdx = Math.max(0, endIdx - visibleCount);
   const visible = messages.slice(startIdx, Math.max(0, endIdx));
 
+  // Channel name for compact header
+  const activeChannelName = isDM
+    ? `DM:${chatTarget}`
+    : channels.find((c) => c.index === chatChannel)?.name || (chatChannel === 0 ? "public" : `ch${chatChannel}`);
+
+  // Get visible channels for sidebar
+  const visibleChannels = channels.length > 0
+    ? channels.filter((ch) => ch.index === 0 || ch.name)
+    : [];
+
   return (
     <Box flexDirection="row" paddingX={1}>
-      {/* Channel sidebar */}
-      <Box flexDirection="column" width={sidebarWidth} borderStyle="single" borderColor={theme.border.normal} borderRight borderTop={false} borderBottom={false} borderLeft={false}>
-        <Text color={theme.fg.secondary} bold>CHANNELS</Text>
-        {(() => {
-          // Always show ch0 as "public", then only named channels
-          const visibleChannels = channels.length > 0
-            ? channels.filter((ch) => ch.index === 0 || ch.name)
-            : [];
-          if (visibleChannels.length === 0) {
-            const isActive = !isDM && chatChannel === 0;
-            return <Text color={isActive ? theme.fg.accent : theme.fg.primary} bold={isActive}>{isActive ? "● " : "  "}public</Text>;
-          }
-          return visibleChannels.map((ch) => {
-            const isActive = !isDM && chatChannel === ch.index;
-            const label = ch.index === 0 ? "public" : `#${ch.name}`;
-            return (
-              <Box key={ch.index}>
-                <Text color={isActive ? theme.fg.accent : theme.fg.primary} bold={isActive}>
-                  {isActive ? "● " : "  "}{label.slice(0, sidebarWidth - 3)}
-                </Text>
+      {/* Channel sidebar — wide only */}
+      {wide && (
+        <Box flexDirection="column" width={sidebarWidth} borderStyle="single" borderColor={theme.border.normal} borderRight borderTop={false} borderBottom={false} borderLeft={false}>
+          <Text color={theme.fg.secondary} bold>CHANNELS</Text>
+          {visibleChannels.length === 0 ? (
+            <Text color={!isDM && chatChannel === 0 ? theme.fg.accent : theme.fg.primary} bold={!isDM && chatChannel === 0}>
+              {!isDM && chatChannel === 0 ? "● " : "  "}public
+            </Text>
+          ) : (
+            visibleChannels.map((ch) => {
+              const isActive = !isDM && chatChannel === ch.index;
+              const label = ch.index === 0 ? "public" : `#${ch.name}`;
+              return (
+                <Box key={ch.index}>
+                  <Text color={isActive ? theme.fg.accent : theme.fg.primary} bold={isActive}>
+                    {isActive ? "● " : "  "}{label.slice(0, sidebarWidth - 3)}
+                  </Text>
+                </Box>
+              );
+            })
+          )}
+          {isDM && (
+            <>
+              <Box marginTop={1}>
+                <Text color={theme.fg.secondary} bold>DM</Text>
               </Box>
-            );
-          });
-        })()}
-        {isDM && (
-          <Box marginTop={1}>
-            <Text color={theme.fg.secondary} bold>DM</Text>
-          </Box>
-        )}
-        {isDM && (
-          <Box>
-            <Text color={theme.fg.accent} bold>● {chatTarget.slice(0, sidebarWidth - 3)}</Text>
-          </Box>
-        )}
-      </Box>
+              <Box>
+                <Text color={theme.fg.accent} bold>● {chatTarget.slice(0, sidebarWidth - 3)}</Text>
+              </Box>
+            </>
+          )}
+        </Box>
+      )}
 
       {/* Messages area */}
-      <Box flexDirection="column" flexGrow={1} paddingLeft={1}>
+      <Box flexDirection="column" flexGrow={1} paddingLeft={wide ? 1 : 0}>
+
+      {/* Compact channel header — medium/narrow */}
+      {!wide && (
+        <Box>
+          <Text color={theme.fg.accent} bold>● {activeChannelName}</Text>
+          <Text color={theme.fg.muted}> ({messages.length} msgs)</Text>
+        </Box>
+      )}
 
       {visible.length === 0 && (
         <Box flexDirection="column" paddingY={1}>
-          <Text color={theme.fg.muted}>  No messages yet. Start typing to send a message.</Text>
-          <Text color={theme.fg.muted}>  Go to Nodes (2) to select a contact, or type /to &lt;name&gt;</Text>
+          <Text color={theme.fg.muted}>  No messages yet. Press Enter to type.</Text>
         </Box>
       )}
       {visible.map((m) => {
         const time = formatTime(m.timestamp);
-        const chTag = m.channelIdx !== undefined ? `CH${m.channelIdx}` : "DM";
         const snrStr = m.snr !== undefined ? `${m.snr.toFixed(1)}dB` : "";
 
         const senderColor = m.isSelf
@@ -846,34 +867,40 @@ function ChatView({
             ? theme.message.system
             : theme.message.other;
 
-        const timeCol = time.padEnd(9);
-        const chanCol = chTag.padEnd(6);
-        const senderCol = m.sender.slice(0, 13).padEnd(15);
-        const fixedWidth = 9 + 6 + 15 + 7 + 4;
-        const maxMsgLen = Math.max(10, msgAreaWidth - fixedWidth);
-        const msgText = m.text.length > maxMsgLen ? m.text.slice(0, maxMsgLen - 1) + "…" : m.text;
+        // Responsive message layout
+        if (wide || medium) {
+          const timeCol = time.padEnd(9);
+          const senderMax = wide ? 13 : 8;
+          const senderPad = wide ? 15 : 10;
+          const senderCol = m.sender.slice(0, senderMax).padEnd(senderPad);
+          const fixedWidth = 9 + senderPad + 4;
+          const maxMsgLen = Math.max(10, msgAreaWidth - fixedWidth);
+          const msgText = m.text.length > maxMsgLen ? m.text.slice(0, maxMsgLen - 1) + "…" : m.text;
 
+          return (
+            <Box key={m.id}>
+              <Text color={theme.fg.muted}>{timeCol}</Text>
+              <Text color={senderColor} bold={!m.isSelf}>{senderCol}</Text>
+              <Text color={theme.fg.primary}>{msgText}</Text>
+              {wide && snrStr && (
+                <Text color={m.snr !== undefined ? snrColor(m.snr) : theme.fg.muted}> {snrStr}</Text>
+              )}
+              {m.isSelf && m.status === "pending" && <Text color={theme.fg.muted}> [···]</Text>}
+              {m.isSelf && m.status === "confirmed" && <Text color={theme.status.online}> [✓]</Text>}
+            </Box>
+          );
+        }
+
+        // Narrow: minimal layout
+        const senderShort = m.sender.slice(0, 6);
+        const maxMsg = Math.max(5, cols - senderShort.length - 5);
+        const msgText = m.text.length > maxMsg ? m.text.slice(0, maxMsg - 1) + "…" : m.text;
         return (
           <Box key={m.id}>
-            <Text color={theme.fg.muted}>{timeCol}</Text>
-            <Text color={m.channelIdx !== undefined ? theme.message.channel : theme.fg.muted}>
-              {chanCol}
-            </Text>
-            <Text color={senderColor} bold={!m.isSelf}>
-              {senderCol}
-            </Text>
+            <Text color={senderColor} bold={!m.isSelf}>{senderShort} </Text>
             <Text color={theme.fg.primary}>{msgText}</Text>
-            {snrStr && (
-              <Text color={m.snr !== undefined ? snrColor(m.snr) : theme.fg.muted}>
-                {" " + snrStr}
-              </Text>
-            )}
-            {m.isSelf && m.status === "pending" && (
-              <Text color={theme.fg.muted}> [···]</Text>
-            )}
-            {m.isSelf && m.status === "confirmed" && (
-              <Text color={theme.status.online}> [✓]</Text>
-            )}
+            {m.isSelf && m.status === "pending" && <Text color={theme.fg.muted}> ···</Text>}
+            {m.isSelf && m.status === "confirmed" && <Text color={theme.status.online}> ✓</Text>}
           </Box>
         );
       })}
