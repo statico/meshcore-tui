@@ -18,6 +18,7 @@ function usage(): never {
 
   Options:
     -p, --port <port>    TCP port (default: ${DEFAULT_TCP_PORT})
+    --tz <timezone>      Set timezone (e.g. America/Los_Angeles)
     -h, --help           Show this help
 
   Keybindings:
@@ -47,6 +48,7 @@ for (let i = 0; i < args.length; i++) {
   const arg = args[i];
   if (arg === "-h" || arg === "--help") usage();
   else if (arg === "-p" || arg === "--port") port = parseInt(args[++i], 10);
+  else if (arg === "--tz") process.env.TZ = args[++i];
   else if (!arg.startsWith("-")) host = arg;
 }
 

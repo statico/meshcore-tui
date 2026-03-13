@@ -1336,10 +1336,7 @@ function HelpRow({ keys, desc }: { keys: string; desc: string }) {
 
 function formatTime(ts: number): string {
   const d = new Date(ts * 1000);
-  const h = String(d.getHours()).padStart(2, "0");
-  const m = String(d.getMinutes()).padStart(2, "0");
-  const s = String(d.getSeconds()).padStart(2, "0");
-  return `${h}:${m}:${s}`;
+  return d.toLocaleTimeString(undefined, { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 function timeSince(unixTimestamp: number): string {
