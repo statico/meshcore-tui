@@ -601,19 +601,27 @@ export class MeshCoreClient extends EventEmitter {
     };
   }
 
-  async getChannel(idx: number): Promise<ChannelInfo> {
-    const w = new BufferWriter();
-    w.writeByte(CommandCode.GET_CHANNEL);
-    w.writeByte(idx);
-    const resp = await this.sendCommand(w.toBytes());
-    if (resp[0] !== ResponseCode.CHANNEL_INFO) {
-      throw new Error(`GET_CHANNEL(${idx}) failed: code ${resp[0]} (0x${resp[0].toString(16)}) len=${resp.length} raw=${toHex(resp.slice(0, 8))}`);
+  async getChannel(idx: number, retries = 2): Promise<ChannelInfo> {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      const w = new BufferWriter();
+      w.writeByte(CommandCode.GET_CHANNEL);
+      w.writeByte(idx);
+      const resp = await this.sendCommand(w.toBytes());
+      if (resp[0] === ResponseCode.CHANNEL_INFO) {
+        const r = new BufferReader(resp.slice(1));
+        const index = r.readByte();
+        const name = r.readFixedString(32);
+        const secret = r.readBytes(16);
+        return { index, name, secret };
+      }
+      // Got a stale frame from a previous command — retry
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 100));
+        continue;
+      }
+      throw new Error(`GET_CHANNEL(${idx}) failed: code ${resp[0]} (0x${resp[0].toString(16)}) len=${resp.length}`);
     }
-    const r = new BufferReader(resp.slice(1));
-    const index = r.readByte(); // channel idx from response
-    const name = r.readFixedString(32);
-    const secret = r.readBytes(16); // 16-byte channel key
-    return { index, name, secret };
+    throw new Error(`GET_CHANNEL(${idx}) failed after retries`);
   }
 
   async setChannel(idx: number, name: string, secret: Uint8Array): Promise<void> {

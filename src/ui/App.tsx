@@ -88,6 +88,7 @@ export default function App({ client, deviceKey }: AppProps) {
   // Initialize
   useEffect(() => {
     (async () => {
+      addSystemMessage("Connected to device. Loading...");
       try {
         // Load persisted messages from SQLite
         const saved = getMessages(deviceKey);
@@ -125,6 +126,8 @@ export default function App({ client, deviceKey }: AppProps) {
           setBattery(batt.percentage);
           setBatteryMv(batt.millivolts);
         } catch {}
+        // Delay to let straggling contact frames drain before channel queries
+        await new Promise((r) => setTimeout(r, 500));
         try {
           const chs = await client.getAllChannels();
           setChannels(chs);
@@ -146,6 +149,7 @@ export default function App({ client, deviceKey }: AppProps) {
           const msgs = await client.syncAllMessages();
           batchAddMessages(msgs);
         } catch {}
+        addSystemMessage("Ready.");
       } catch (e: any) {
         setError(e.message);
       }
