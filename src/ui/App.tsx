@@ -471,7 +471,7 @@ export default function App({ client, deviceKey }: AppProps) {
           const ts = Math.floor(Date.now() / 1000);
           setMessages((prev) => [
             ...prev,
-            { id: ++msgIdCounter, timestamp: ts, sender: "me", text: value, isSelf: true, channelIdx: chatChannel, status: "pending" },
+            { id: ++msgIdCounter, timestamp: ts, sender: "me", text: value, isSelf: true, channelIdx: chatChannel },
           ]);
           insertMessage({ timestamp: ts, sender: "me", text: value, isSelf: true, channelIdx: chatChannel, deviceKey });
         } else {
