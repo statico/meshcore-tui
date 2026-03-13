@@ -458,19 +458,52 @@ export default function App({ client, deviceKey }: AppProps) {
         setScrollOffset(0);
         return;
       }
-      // Tab/Shift-Tab or ,/. cycle through channels
+      // Tab/Shift-Tab or ,/. cycle through visible channels + system
       if ((key.tab && key.shift) || ch === ",") {
-        const maxCh = channels.length > 0 ? channels.length - 1 : 0;
-        const prev = chatChannel > 0 ? chatChannel - 1 : maxCh;
-        setChatChannel(prev);
-        setChatTarget(prev === 0 ? "public" : `ch${prev}`);
+        const chList = channels.filter((c) => c.index === 0 || c.name);
+        // Cycle: channels... → system → channels...
+        if (chatTarget === "system") {
+          // Go back to last channel
+          const last = chList.length > 0 ? chList[chList.length - 1].index : 0;
+          setChatChannel(last);
+          setChatTarget(last === 0 ? "public" : `ch${last}`);
+        } else if (chList.length > 0) {
+          const curIdx = chList.findIndex((c) => c.index === chatChannel);
+          if (curIdx <= 0) {
+            // At first channel, wrap to system
+            setChatTarget("system");
+          } else {
+            const prev = chList[curIdx - 1].index;
+            setChatChannel(prev);
+            setChatTarget(prev === 0 ? "public" : `ch${prev}`);
+          }
+        } else {
+          setChatTarget("system");
+        }
+        setScrollOffset(0);
         return;
       }
       if (key.tab || ch === ".") {
-        const maxCh = channels.length > 0 ? channels.length - 1 : 0;
-        const next = chatChannel < maxCh ? chatChannel + 1 : 0;
-        setChatChannel(next);
-        setChatTarget(next === 0 ? "public" : `ch${next}`);
+        const chList = channels.filter((c) => c.index === 0 || c.name);
+        if (chatTarget === "system") {
+          // Go to first channel
+          const first = chList.length > 0 ? chList[0].index : 0;
+          setChatChannel(first);
+          setChatTarget(first === 0 ? "public" : `ch${first}`);
+        } else if (chList.length > 0) {
+          const curIdx = chList.findIndex((c) => c.index === chatChannel);
+          if (curIdx >= chList.length - 1) {
+            // At last channel, wrap to system
+            setChatTarget("system");
+          } else {
+            const next = chList[curIdx + 1].index;
+            setChatChannel(next);
+            setChatTarget(next === 0 ? "public" : `ch${next}`);
+          }
+        } else {
+          setChatTarget("system");
+        }
+        setScrollOffset(0);
         return;
       }
       // [ and ] cycle top-level views
