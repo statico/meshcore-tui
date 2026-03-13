@@ -115,9 +115,11 @@ export default function App({ client, deviceKey }: AppProps) {
           setDeviceInfo(info);
         } catch {}
         try { await client.setDeviceTime(); } catch {}
+        await client.drainFrames(300);
         try {
           const contactList = await client.getContacts();
           setContacts(contactList);
+          addSystemMessage(`Loaded ${contactList.length} contacts`);
         } catch (e: any) {
           addSystemMessage(`Failed to load contacts: ${e.message}`);
         }
@@ -126,8 +128,7 @@ export default function App({ client, deviceKey }: AppProps) {
           setBattery(batt.percentage);
           setBatteryMv(batt.millivolts);
         } catch {}
-        // Delay to let straggling contact frames drain before channel queries
-        await new Promise((r) => setTimeout(r, 500));
+        await client.drainFrames(300);
         try {
           const chs = await client.getAllChannels();
           setChannels(chs);

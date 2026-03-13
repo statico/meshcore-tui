@@ -235,6 +235,18 @@ export class MeshCoreClient extends EventEmitter {
     });
   }
 
+  /** Drain any stale frames by briefly accepting and discarding them */
+  async drainFrames(ms = 200): Promise<void> {
+    return new Promise((resolve) => {
+      const drain = () => { this.pendingResolve = drain; };
+      this.pendingResolve = drain;
+      setTimeout(() => {
+        this.pendingResolve = null;
+        resolve();
+      }, ms);
+    });
+  }
+
   // ─── High-level commands ─────────────────────────────────────
 
   async appStart(appName = "mccli"): Promise<SelfInfo> {
