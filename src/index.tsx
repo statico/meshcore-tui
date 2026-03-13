@@ -32,9 +32,9 @@ function usage(): never {
     q                    Quit (with confirmation)
     Ctrl+C               Force quit
 
-  Chat commands:
-    /to <name|public|ch#>  Set chat target
-    /quit                  Exit
+  Chat navigation:
+    . / ,                Select next / previous target
+    d                    DM selected node (from nodes view)
 `);
   process.exit(0);
 }

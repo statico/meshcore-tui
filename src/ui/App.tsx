@@ -346,43 +346,6 @@ export default function App({ client, deviceKey }: AppProps) {
       if (!value.trim()) return;
       setInput("");
 
-      // Keep /to and /quit as power-user shortcuts
-      if (value.startsWith("/")) {
-        const parts = value.slice(1).split(/\s+/);
-        const cmd = parts[0].toLowerCase();
-        if (cmd === "quit" || cmd === "q") { client.disconnect(); exit(); return; }
-        if (cmd === "to") {
-          const target = parts.slice(1).join(" ");
-          if (!target || target === "public" || target === "0") {
-            setChatTarget("public"); setChatChannel(0);
-            addSystemMessage("Target set to: PUBLIC CH0");
-          } else if (target.match(/^ch?\d+$/i)) {
-            const idx = parseInt(target.replace(/^ch?/i, ""), 10);
-            setChatTarget(`ch${idx}`); setChatChannel(idx);
-            addSystemMessage(`Target set to: CH${idx}`);
-          } else if (target.startsWith("#")) {
-            // Find channel by name
-            const chName = target.slice(1).toLowerCase();
-            const ch = channels.find((c) => c.name?.toLowerCase() === chName);
-            if (ch) {
-              setChatTarget(`ch${ch.index}`); setChatChannel(ch.index);
-              addSystemMessage(`Target set to: #${ch.name} (CH${ch.index})`);
-            } else {
-              setError(`Channel not found: ${target}. Use config view to create channels.`);
-            }
-          } else {
-            const contact = client.findContact(target);
-            if (contact) {
-              setChatTarget(contact.name);
-              addSystemMessage(`Target set to DM: ${contact.name}`);
-            } else {
-              setError(`Contact not found: ${target}`);
-            }
-          }
-          return;
-        }
-      }
-
       // Send message
       try {
         if (chatTarget === "public" || chatTarget.startsWith("ch")) {
@@ -458,51 +421,32 @@ export default function App({ client, deviceKey }: AppProps) {
         setScrollOffset(0);
         return;
       }
-      // Tab/Shift-Tab or ,/. cycle through visible channels + system
-      if ((key.tab && key.shift) || ch === ",") {
+      // Tab/Shift-Tab or ,/. cycle through all sidebar targets
+      if ((key.tab && key.shift) || ch === "," || key.tab || ch === ".") {
+        const forward = key.tab || ch === ".";
+        // Build ordered target list: channels → rooms → DMs → system
+        type SidebarTarget = { target: string; channel: number };
+        const targets: SidebarTarget[] = [];
         const chList = channels.filter((c) => c.index === 0 || c.name);
-        // Cycle: channels... → system → channels...
-        if (chatTarget === "system") {
-          // Go back to last channel
-          const last = chList.length > 0 ? chList[chList.length - 1].index : 0;
-          setChatChannel(last);
-          setChatTarget(last === 0 ? "public" : `ch${last}`);
-        } else if (chList.length > 0) {
-          const curIdx = chList.findIndex((c) => c.index === chatChannel);
-          if (curIdx <= 0) {
-            // At first channel, wrap to system
-            setChatTarget("system");
-          } else {
-            const prev = chList[curIdx - 1].index;
-            setChatChannel(prev);
-            setChatTarget(prev === 0 ? "public" : `ch${prev}`);
-          }
-        } else {
-          setChatTarget("system");
+        for (const c of chList) {
+          targets.push({ target: c.index === 0 ? "public" : `ch${c.index}`, channel: c.index });
         }
-        setScrollOffset(0);
-        return;
-      }
-      if (key.tab || ch === ".") {
-        const chList = channels.filter((c) => c.index === 0 || c.name);
-        if (chatTarget === "system") {
-          // Go to first channel
-          const first = chList.length > 0 ? chList[0].index : 0;
-          setChatChannel(first);
-          setChatTarget(first === 0 ? "public" : `ch${first}`);
-        } else if (chList.length > 0) {
-          const curIdx = chList.findIndex((c) => c.index === chatChannel);
-          if (curIdx >= chList.length - 1) {
-            // At last channel, wrap to system
-            setChatTarget("system");
-          } else {
-            const next = chList[curIdx + 1].index;
-            setChatChannel(next);
-            setChatTarget(next === 0 ? "public" : `ch${next}`);
-          }
-        } else {
-          setChatTarget("system");
+        if (targets.length === 0) targets.push({ target: "public", channel: 0 });
+        for (const c of contacts.filter((c) => c.typeName === "room")) {
+          targets.push({ target: c.name, channel: -1 });
         }
+        for (const c of contacts.filter((c) => c.typeName === "client").slice(0, 5)) {
+          targets.push({ target: c.name, channel: -1 });
+        }
+        targets.push({ target: "system", channel: -1 });
+
+        const curIdx = targets.findIndex((t) => t.target === chatTarget);
+        const nextIdx = forward
+          ? (curIdx + 1) % targets.length
+          : (curIdx - 1 + targets.length) % targets.length;
+        const next = targets[nextIdx];
+        setChatTarget(next.target);
+        if (next.channel >= 0) setChatChannel(next.channel);
         setScrollOffset(0);
         return;
       }
@@ -1342,8 +1286,7 @@ function HelpModal({ mode, cols, rows }: { mode: Mode; cols: number; rows: numbe
           <HelpRow keys="Enter" desc="Focus input to type" />
           <HelpRow keys="Esc" desc="Unfocus input" />
           <HelpRow keys="Tab/. / Shift-Tab/," desc="Next / previous channel" />
-          <HelpRow keys="/to <target>" desc="Set DM target (name, public, ch#)" />
-          <HelpRow keys="/quit" desc="Exit" />
+          <HelpRow keys="./," desc="Next / previous sidebar target" />
         </Box>
       )}
       {mode === "nodes" && (
