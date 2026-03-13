@@ -10,7 +10,7 @@ import type {
   ChannelInfo,
 } from "../protocol/client";
 import { toHex } from "../protocol/buffer";
-import { theme, snrColor, batteryColor, contactColor } from "./theme";
+import { theme, snrColor, batteryColor, contactColor, usernameColor } from "./theme";
 import { getMessages, insertMessage, type DbMessage } from "../db";
 
 interface ChatMessage {
@@ -912,7 +912,16 @@ function ChatView({
           ? theme.message.self
           : m.sender === "system"
             ? theme.message.system
-            : theme.message.other;
+            : usernameColor(m.sender);
+
+        // Split reply from main text (reply follows after " ↩ " or similar patterns)
+        let mainText = m.text;
+        let replyText = "";
+        const replyIdx = m.text.indexOf(" ↩ ");
+        if (replyIdx > 0) {
+          mainText = m.text.slice(0, replyIdx);
+          replyText = m.text.slice(replyIdx);
+        }
 
         // Responsive message layout
         if (wide || medium) {
@@ -925,7 +934,8 @@ function ChatView({
             <Box key={m.id}>
               <Text color={theme.fg.muted}>{timeCol}</Text>
               <Text color={senderColor} bold={!m.isSelf}>{senderCol}</Text>
-              <Text color={theme.fg.primary}>{m.text}</Text>
+              <Text color={theme.fg.primary}>{mainText}</Text>
+              {replyText && <Text color={theme.fg.muted}>{replyText}</Text>}
               {m.isSelf && m.status === "pending" && <Text color={theme.fg.muted}> [···]</Text>}
               {m.isSelf && m.status === "confirmed" && <Text color={theme.status.online}> [✓]</Text>}
             </Box>
@@ -937,7 +947,8 @@ function ChatView({
         return (
           <Box key={m.id}>
             <Text color={senderColor} bold={!m.isSelf}>{senderShort} </Text>
-            <Text color={theme.fg.primary}>{m.text}</Text>
+            <Text color={theme.fg.primary}>{mainText}</Text>
+            {replyText && <Text color={theme.fg.muted}>{replyText}</Text>}
             {m.isSelf && m.status === "pending" && <Text color={theme.fg.muted}> ···</Text>}
             {m.isSelf && m.status === "confirmed" && <Text color={theme.status.online}> ✓</Text>}
           </Box>

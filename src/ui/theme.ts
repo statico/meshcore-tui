@@ -59,6 +59,28 @@ export function batteryColor(pct: number): string {
   return theme.battery.critical;
 }
 
+// Distinct colors for different usernames in chat
+const usernameColors = [
+  "#00bfff", // cyan
+  "#ff00cc", // magenta
+  "#ffff00", // yellow
+  "#ff6600", // orange
+  "#00ff88", // green
+  "#ff4488", // pink
+  "#44ddff", // light blue
+  "#cc88ff", // lavender
+  "#ff9f00", // amber
+  "#00ccaa", // teal
+];
+
+export function usernameColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+  }
+  return usernameColors[Math.abs(hash) % usernameColors.length];
+}
+
 export function contactColor(typeName: string): string {
   switch (typeName) {
     case "client": return theme.contact.client;
