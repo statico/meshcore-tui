@@ -772,12 +772,16 @@ export class MeshCoreClient extends EventEmitter {
   async getAllChannels(): Promise<ChannelInfo[]> {
     const channels: ChannelInfo[] = [];
     const maxCh = this._deviceInfo?.maxChannels ?? 8;
+    let consecutiveErrors = 0;
     for (let i = 0; i < maxCh; i++) {
       try {
         const ch = await this.getChannel(i);
         channels.push(ch);
+        consecutiveErrors = 0;
       } catch {
-        break;
+        consecutiveErrors++;
+        // Stop after 3 consecutive errors (likely hit device limit)
+        if (consecutiveErrors >= 3) break;
       }
     }
     return channels;

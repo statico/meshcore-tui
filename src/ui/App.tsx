@@ -128,7 +128,17 @@ export default function App({ client, deviceKey }: AppProps) {
         try {
           const chs = await client.getAllChannels();
           setChannels(chs);
-          addSystemMessage(`Loaded ${chs.length} channels: ${chs.map((c) => `ch${c.index}=${JSON.stringify(c.name)}`).join(", ")}`);
+          if (chs.length > 0) {
+            addSystemMessage(`Loaded ${chs.length} channels: ${chs.map((c) => `ch${c.index}=${JSON.stringify(c.name)}`).join(", ")}`);
+          } else {
+            // Try single channel fetch for debugging
+            try {
+              const ch0 = await client.getChannel(0);
+              addSystemMessage(`Single ch0 fetch OK: name=${JSON.stringify(ch0.name)}`);
+            } catch (e2: any) {
+              addSystemMessage(`Channels: getAllChannels returned 0. Single ch0 fetch also failed: ${e2.message}`);
+            }
+          }
         } catch (e: any) {
           addSystemMessage(`Failed to load channels: ${e.message}`);
         }
