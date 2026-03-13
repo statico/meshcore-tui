@@ -6,7 +6,7 @@ import { render } from "ink";
 import App from "./ui/App";
 import { MeshCoreClient } from "./protocol/client";
 import { DEFAULT_TCP_PORT } from "./protocol/constants";
-import { closeDb, deviceKey } from "./db";
+import { clearDb, closeDb, deviceKey } from "./db";
 
 function usage(): never {
   console.log(`Usage: meshcore-tui <address> [options]
@@ -18,6 +18,7 @@ function usage(): never {
 
   Options:
     -p, --port <port>    TCP port (default: ${DEFAULT_TCP_PORT})
+    --clear              Clear message database on start
     -h, --help           Show this help
 
   Keybindings:
@@ -42,11 +43,13 @@ function usage(): never {
 const args = process.argv.slice(2);
 let host: string | null = null;
 let port = DEFAULT_TCP_PORT;
+let clear = false;
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
   if (arg === "-h" || arg === "--help") usage();
   else if (arg === "-p" || arg === "--port") port = parseInt(args[++i], 10);
+  else if (arg === "--clear") clear = true;
   else if (!arg.startsWith("-")) host = arg;
 }
 
@@ -56,6 +59,11 @@ if (!host) {
 }
 
 async function main() {
+  if (clear) {
+    clearDb();
+    console.log("Message database cleared.");
+  }
+
   const client = new MeshCoreClient(host!, port);
 
   console.log(`Connecting to ${host}:${port}...`);

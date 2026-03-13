@@ -51,6 +51,12 @@ export function openDb(): Database {
   return db;
 }
 
+export function clearDb(): void {
+  closeDb();
+  const path = getDbPath();
+  try { require("node:fs").unlinkSync(path); } catch {}
+}
+
 export function closeDb(): void {
   if (db) {
     db.close();
