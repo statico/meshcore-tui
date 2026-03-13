@@ -164,6 +164,12 @@ export class MeshCoreClient extends EventEmitter {
       case PushCode.TELEMETRY_RESPONSE:
         this.emit("telemetry_response", data);
         break;
+      case PushCode.TRACE_DATA:
+        this.emit("trace_data", data);
+        break;
+      case PushCode.PATH_DISCOVERY_RESPONSE:
+        this.emit("path_discovery_response", data);
+        break;
       case PushCode.CONTACT_DELETED:
         this.emit("contact_deleted", data);
         break;
@@ -650,6 +656,28 @@ export class MeshCoreClient extends EventEmitter {
     const resp = await this.sendCommand(w.toBytes());
     if (resp[0] !== ResponseCode.OK) {
       throw new Error(`REMOVE_CONTACT failed: code ${resp[0]}`);
+    }
+  }
+
+  /** Request status/telemetry from a contact */
+  async sendStatusRequest(publicKey: Uint8Array): Promise<void> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.SEND_STATUS_REQ);
+    w.writeBytes(publicKey.slice(0, 32));
+    const resp = await this.sendCommand(w.toBytes());
+    if (resp[0] !== ResponseCode.OK && resp[0] !== ResponseCode.MSG_SENT) {
+      throw new Error(`SEND_STATUS_REQ failed: code ${resp[0]}`);
+    }
+  }
+
+  /** Request path discovery (traceroute) to a contact */
+  async sendPathDiscovery(publicKey: Uint8Array): Promise<void> {
+    const w = new BufferWriter();
+    w.writeByte(CommandCode.SEND_PATH_DISCOVERY_REQ);
+    w.writeBytes(publicKey.slice(0, 32));
+    const resp = await this.sendCommand(w.toBytes());
+    if (resp[0] !== ResponseCode.OK && resp[0] !== ResponseCode.MSG_SENT) {
+      throw new Error(`SEND_PATH_DISCOVERY_REQ failed: code ${resp[0]}`);
     }
   }
 

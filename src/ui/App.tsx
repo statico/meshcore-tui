@@ -76,6 +76,7 @@ export default function App({ client, deviceKey }: AppProps) {
 
   // Confirmation dialog state
   const [confirmAction, setConfirmAction] = useState<{ label: string; action: () => Promise<void> } | null>(null);
+  const [responseModal, setResponseModal] = useState<{ title: string; lines: string[] } | null>(null);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pendingMsgsRef = useRef<ReceivedMessage[]>([]);
@@ -170,6 +171,70 @@ export default function App({ client, deviceKey }: AppProps) {
           }
         }
         return next;
+      });
+    });
+
+    client.on("trace_data", (data: Uint8Array) => {
+      // Parse trace data: first 32 bytes = source key, rest = hop keys (32 bytes each)
+      const hops: string[] = [];
+      for (let i = 32; i + 32 <= data.length; i += 32) {
+        const hopKey = toHex(data.slice(i, i + 32)).slice(0, 8);
+        const contact = [...(client as any)._contacts.values()].find(
+          (c: any) => toHex(c.publicKey).startsWith(hopKey)
+        );
+        hops.push(contact ? contact.name : hopKey + "...");
+      }
+      setResponseModal({
+        title: "TRACEROUTE",
+        lines: hops.length > 0
+          ? hops.map((h, i) => `  ${i + 1}. ${h}`)
+          : ["  Direct (no intermediate hops)"],
+      });
+    });
+
+    client.on("telemetry_response", (data: Uint8Array) => {
+      // Parse telemetry response
+      const lines: string[] = [];
+      if (data.length >= 4) {
+        const battMv = (data[1] << 8) | data[0];
+        if (battMv > 0) lines.push(`  Battery: ${battMv}mV`);
+      }
+      if (data.length >= 8) {
+        const uptime = (data[5] << 16) | (data[4] << 8) | data[3];
+        if (uptime > 0) {
+          const hrs = Math.floor(uptime / 3600);
+          const mins = Math.floor((uptime % 3600) / 60);
+          lines.push(`  Uptime: ${hrs}h ${mins}m`);
+        }
+      }
+      if (lines.length === 0) lines.push("  Response received (no data parsed)");
+      setResponseModal({ title: "TELEMETRY", lines });
+    });
+
+    client.on("status_response", (data: Uint8Array) => {
+      const lines: string[] = [];
+      if (data.length >= 2) {
+        const battPct = data[0];
+        lines.push(`  Battery: ${battPct}%`);
+      }
+      if (lines.length === 0) lines.push("  Status response received");
+      setResponseModal({ title: "STATUS", lines });
+    });
+
+    client.on("path_discovery_response", (data: Uint8Array) => {
+      const hops: string[] = [];
+      for (let i = 0; i + 32 <= data.length; i += 32) {
+        const hopKey = toHex(data.slice(i, i + 32)).slice(0, 8);
+        const contact = [...(client as any)._contacts.values()].find(
+          (c: any) => toHex(c.publicKey).startsWith(hopKey)
+        );
+        hops.push(contact ? contact.name : hopKey + "...");
+      }
+      setResponseModal({
+        title: "PATH DISCOVERY",
+        lines: hops.length > 0
+          ? hops.map((h, i) => `  ${i + 1}. ${h}`)
+          : ["  Direct path"],
       });
     });
 
@@ -417,6 +482,12 @@ export default function App({ client, deviceKey }: AppProps) {
   useInput((ch, key) => {
     if (error) setError(null);
 
+    // ── RESPONSE MODAL ──
+    if (responseModal) {
+      setResponseModal(null);
+      return;
+    }
+
     // ── HELP MODAL ──
     if (showHelp) {
       // Any key dismisses the help modal
@@ -553,6 +624,20 @@ export default function App({ client, deviceKey }: AppProps) {
           setContacts(cl);
           addSystemMessage(`Refreshed: ${cl.length} contacts`);
         }).catch(() => {});
+      } else if (ch === "t" && contacts[selectedNode]) {
+        // Traceroute
+        const c = contacts[selectedNode];
+        addSystemMessage(`Sending traceroute to ${c.name}...`);
+        client.sendPathDiscovery(c.publicKey).then(() => {
+          addSystemMessage(`Traceroute request sent to ${c.name}`);
+        }).catch((e: any) => setError(`Traceroute failed: ${e.message}`));
+      } else if (ch === "e" && contacts[selectedNode]) {
+        // Telemetry/status request
+        const c = contacts[selectedNode];
+        addSystemMessage(`Requesting status from ${c.name}...`);
+        client.sendStatusRequest(c.publicKey).then(() => {
+          addSystemMessage(`Status request sent to ${c.name}`);
+        }).catch((e: any) => setError(`Status request failed: ${e.message}`));
       } else if (ch === "x" && contacts[selectedNode]) {
         // Remove contact with confirmation
         const c = contacts[selectedNode];
@@ -627,6 +712,33 @@ export default function App({ client, deviceKey }: AppProps) {
       </Box>
 
       {/* ═══ CONFIRMATION DIALOG (modal) ═══ */}
+      {responseModal && (
+        <Box
+          position="absolute"
+          flexDirection="column"
+          width={cols}
+          height={rows}
+          justifyContent="center"
+          alignItems="center"
+        >
+          <Box
+            flexDirection="column"
+            borderStyle="double"
+            borderColor={theme.fg.accent}
+            paddingX={3}
+            paddingY={1}
+            width={Math.min(50, cols - 4)}
+          >
+            <Text color={theme.fg.accent} bold>═══ {responseModal.title} ═══</Text>
+            <Text> </Text>
+            {responseModal.lines.map((line, i) => (
+              <Text key={i} color={theme.fg.primary}>{line}</Text>
+            ))}
+            <Text> </Text>
+            <Text color={theme.fg.muted}>Press any key to dismiss</Text>
+          </Box>
+        </Box>
+      )}
       {confirmAction && (
         <Box
           position="absolute"
@@ -1331,6 +1443,8 @@ function HelpModal({ mode, cols, rows }: { mode: Mode; cols: number; rows: numbe
           <HelpRow keys="j / k / ↑ / ↓" desc="Navigate node list" />
           <HelpRow keys="g / G" desc="Jump to top / bottom" />
           <HelpRow keys="d" desc="DM selected node" />
+          <HelpRow keys="t" desc="Traceroute to selected node" />
+          <HelpRow keys="e" desc="Request telemetry/status" />
           <HelpRow keys="a" desc="Send advertisement beacon" />
           <HelpRow keys="r" desc="Refresh contacts from device" />
           <HelpRow keys="x" desc="Remove selected contact" />
