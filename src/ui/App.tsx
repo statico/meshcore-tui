@@ -829,7 +829,9 @@ function ChatView({
   const allMessages = messages || [];
   const filtered = isSystem
     ? allMessages.filter((m) => m.sender === "system")
-    : allMessages.filter((m) => m.sender !== "system");
+    : isDM
+      ? allMessages.filter((m) => m.sender !== "system" && m.channelIdx === undefined)
+      : allMessages.filter((m) => m.sender !== "system" && (m.channelIdx ?? 0) === chatChannel);
 
   // Responsive breakpoints
   const wide = cols >= 80;
