@@ -926,18 +926,12 @@ function ChatView({
           const senderMax = wide ? 13 : 8;
           const senderPad = wide ? 15 : 10;
           const senderCol = m.sender.slice(0, senderMax).padEnd(senderPad);
-          const fixedWidth = 9 + senderPad + 4;
-          const maxMsgLen = Math.max(10, msgAreaWidth - fixedWidth);
-          const msgText = m.text.length > maxMsgLen ? m.text.slice(0, maxMsgLen - 1) + "…" : m.text;
 
           return (
-            <Box key={m.id}>
+            <Box key={m.id} width={msgAreaWidth}>
               <Text color={theme.fg.muted}>{timeCol}</Text>
               <Text color={senderColor} bold={!m.isSelf}>{senderCol}</Text>
-              <Text color={theme.fg.primary}>{msgText}</Text>
-              {wide && snrStr && (
-                <Text color={m.snr !== undefined ? snrColor(m.snr) : theme.fg.muted}> {snrStr}</Text>
-              )}
+              <Text color={theme.fg.primary} wrap="wrap">{m.text}</Text>
               {m.isSelf && m.status === "pending" && <Text color={theme.fg.muted}> [···]</Text>}
               {m.isSelf && m.status === "confirmed" && <Text color={theme.status.online}> [✓]</Text>}
             </Box>
@@ -946,12 +940,10 @@ function ChatView({
 
         // Narrow: minimal layout
         const senderShort = m.sender.slice(0, 6);
-        const maxMsg = Math.max(5, cols - senderShort.length - 5);
-        const msgText = m.text.length > maxMsg ? m.text.slice(0, maxMsg - 1) + "…" : m.text;
         return (
-          <Box key={m.id}>
+          <Box key={m.id} width={cols - 4}>
             <Text color={senderColor} bold={!m.isSelf}>{senderShort} </Text>
-            <Text color={theme.fg.primary}>{msgText}</Text>
+            <Text color={theme.fg.primary} wrap="wrap">{m.text}</Text>
             {m.isSelf && m.status === "pending" && <Text color={theme.fg.muted}> ···</Text>}
             {m.isSelf && m.status === "confirmed" && <Text color={theme.status.online}> ✓</Text>}
           </Box>
