@@ -277,51 +277,19 @@ export class MeshCoreClient extends EventEmitter {
     const lat = r.readInt32LE() / 1e6;
     const lon = r.readInt32LE() / 1e6;
 
-    // After base fields (43 bytes), the remaining bytes contain radio params + name.
-    // The number of skip bytes before freq varies by firmware version.
-    // Auto-detect by scanning for a plausible freq value (100-1000 MHz range).
-    const savedOffset = r.offset;
-    let skipBytes = 0;
-    let freq = 0, bw = 0, sf = 0, cr = 0;
-    let foundParams = false;
-
-    for (let skip = 0; skip <= Math.min(8, r.remaining - 11); skip++) {
-      r.offset = savedOffset + skip;
-      const testFreq = r.readUInt32LE() / 1000;
-      const testBw = r.readUInt32LE() / 1000;
-      const testSf = r.readByte();
-      const testCr = r.readByte();
-
-      if (testFreq >= 100 && testFreq <= 1000 &&
-          testBw >= 5 && testBw <= 600 &&
-          testSf >= 5 && testSf <= 12 &&
-          testCr >= 1 && testCr <= 8) {
-        freq = testFreq;
-        bw = testBw;
-        sf = testSf;
-        cr = testCr;
-        skipBytes = skip;
-        foundParams = true;
-        console.error(`[DEBUG] Found radio params at skip=${skip} from offset ${savedOffset}: freq=${freq} bw=${bw} sf=${sf} cr=${cr}`);
-        break;
-      }
-    }
-
-    if (!foundParams) {
-      // Fallback: just read from current position
-      r.offset = savedOffset + 1; // skip 1 byte (manualAddContacts)
-      freq = r.remaining >= 4 ? r.readUInt32LE() / 1000 : 0;
-      bw = r.remaining >= 4 ? r.readUInt32LE() / 1000 : 0;
-      sf = r.remaining >= 1 ? r.readByte() : 0;
-      cr = r.remaining >= 1 ? r.readByte() : 0;
-      console.error(`[DEBUG] Radio params NOT auto-detected, fallback: freq=${freq} bw=${bw} sf=${sf} cr=${cr}`);
-    }
-
-    const manualAddContacts = skipBytes > 0 ? body[savedOffset] : 0;
+    // Per companion_protocol.md: 4 metadata bytes, then radio params, then name
+    const multiAcks = r.readByte();
+    const advertLocPolicy = r.readByte();
+    const telemetryMode = r.readByte();
+    const manualAddContacts = r.readByte();
+    const freq = r.remaining >= 4 ? r.readUInt32LE() / 1000 : 0;
+    const bw = r.remaining >= 4 ? r.readUInt32LE() / 1000 : 0;
+    const sf = r.remaining >= 1 ? r.readByte() : 0;
+    const cr = r.remaining >= 1 ? r.readByte() : 0;
     const name = r.remaining > 0 ? r.readRemainingString() : "";
 
     console.error(
-      `[DEBUG] Parsed SelfInfo: skip=${skipBytes} freq=${freq} bw=${bw} sf=${sf} cr=${cr} name="${name}"`,
+      `[DEBUG] Parsed SelfInfo: freq=${freq} bw=${bw} sf=${sf} cr=${cr} name="${name}"`,
     );
 
     const info: SelfInfo = {
@@ -331,9 +299,9 @@ export class MeshCoreClient extends EventEmitter {
       publicKey,
       lat,
       lon,
-      multiAcks: 0,
-      advertLocPolicy: 0,
-      telemetryMode: 0,
+      multiAcks,
+      advertLocPolicy,
+      telemetryMode,
       manualAddContacts,
       freq,
       bw,
