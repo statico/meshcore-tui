@@ -1,1 +1,1 @@
-# Go use https://github.com/statico/meshtastic-cli instead
+# Go use https://github.com/jkingsman/Remote-Terminal-for-MeshCore instead
